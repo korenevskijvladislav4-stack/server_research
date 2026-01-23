@@ -51,8 +51,10 @@ export const getScreenshotsBySelector = async (req: AuthRequest, res: Response):
  * Take screenshot for a selector
  */
 export const takeScreenshot = async (req: AuthRequest, res: Response): Promise<void> => {
+  const { selectorId } = req.params;
+  let selector: any = null;
+  
   try {
-    const { selectorId } = req.params;
     const connection = await pool.getConnection();
 
     // Get selector info
@@ -67,7 +69,7 @@ export const takeScreenshot = async (req: AuthRequest, res: Response): Promise<v
       return;
     }
 
-    const selector = selectors[0];
+    selector = selectors[0];
 
     // Get casino website (required for building full URL)
     const [casinos] = await connection.query<RowDataPacket[]>(
@@ -149,11 +151,47 @@ export const takeScreenshot = async (req: AuthRequest, res: Response): Promise<v
 
     res.status(201).json(screenshot);
   } catch (error: any) {
-    console.error('Error taking screenshot:', error);
-    res.status(500).json({ 
-      error: 'Failed to take screenshot',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    console.error('\n❌ ========== SCREENSHOT ERROR ==========');
+    console.error('Error taking screenshot for selector ID:', selectorId);
+    console.error('Error type:', error.name || 'Unknown');
+    console.error('Error message:', error.message);
+    console.error('Error code:', (error as any).code || 'N/A');
+    console.error('Error stack:', error.stack);
+    console.error('Selector info:', {
+      id: selectorId,
+      selector: selector?.selector,
+      geo: selector?.geo,
+      url: selector?.url,
+      casino_id: selector?.casino_id,
     });
+    console.error('==========================================\n');
+    
+    // Возвращаем более детальную информацию об ошибке
+    const errorResponse: any = {
+      error: 'Failed to take screenshot',
+    };
+    
+    // В продакшене показываем детали только для отладки
+    if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'production') {
+      errorResponse.message = error.message;
+      
+      // Добавляем специфичные подсказки в зависимости от типа ошибки
+      if (error.message.includes('Executable doesn\'t exist') || 
+          error.message.includes('Could not find Chromium')) {
+        errorResponse.hint = 'Chromium not found. Please install Chromium and set PUPPETEER_EXECUTABLE_PATH in .env';
+        errorResponse.installCommand = 'sudo apt-get install -y chromium-browser';
+      } else if (error.message.includes('timeout')) {
+        errorResponse.hint = 'Request timeout. Check proxy connection or target website availability';
+      } else if (error.message.includes('net::ERR_')) {
+        errorResponse.hint = 'Network error. Check proxy settings and target website accessibility';
+      } else if (error.message.includes('Target closed') || error.message.includes('Session closed')) {
+        errorResponse.hint = 'Browser closed unexpectedly. Check server memory (free -h) and add swap if needed';
+      } else if (error.message.includes('No space left')) {
+        errorResponse.hint = 'No disk space. Free up space on the server';
+      }
+    }
+    
+    res.status(500).json(errorResponse);
   }
 };
 

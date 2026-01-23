@@ -31,7 +31,7 @@ const PORT = process.env.PORT || 5000;
 // Должно быть ДО helmet, чтобы CORS заголовки не блокировались
 const allowedOrigins = process.env.CORS_ORIGIN 
   ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
-  : ['http://localhost:3000', 'http://research.supporthelper.website'];
+  : ['http://localhost:3000'];
 
 console.log('Allowed CORS origins:', allowedOrigins);
 

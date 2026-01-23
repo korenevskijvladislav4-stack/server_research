@@ -83,6 +83,13 @@ export class SlotScreenshotService {
       ignoreDefaultArgs: ['--enable-automation'], // Remove automation flag
     };
 
+    // Поддержка кастомного пути к Chromium (для VPS в России)
+    const customExecutablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    if (customExecutablePath) {
+      launchOptions.executablePath = customExecutablePath;
+      console.log(`Using custom Chromium path: ${customExecutablePath}`);
+    }
+
     if (proxy) {
       const proxyUrl = this.buildProxyUrl(proxy);
       launchOptions.args.push(`--proxy-server=${proxyUrl}`);
@@ -267,8 +274,103 @@ export class SlotScreenshotService {
     }
     console.log(`========================\n`);
 
-    const browser = await this.launchBrowserWithProxy(proxy);
-    const page = await browser.newPage();
+    let browser: Browser | null = null;
+    let page: Page | null = null;
+
+    try {
+      // Проверка доступности Chromium/Chrome
+      console.log(`\n=== Launching browser ===`);
+      console.log(`Puppeteer executable path check...`);
+      
+      try {
+        browser = await this.launchBrowserWithProxy(proxy);
+        console.log(`✅ Browser launched successfully`);
+      } catch (launchError: any) {
+        console.error(`❌ Browser launch failed:`, launchError.message);
+        console.error(`Error details:`, {
+          name: launchError.name,
+          code: (launchError as any).code,
+          errno: (launchError as any).errno,
+          syscall: (launchError as any).syscall,
+        });
+        
+        // Проверяем типичные проблемы
+        if (launchError.message.includes('Executable doesn\'t exist') || 
+            launchError.message.includes('Could not find Chromium')) {
+          throw new Error(
+            `Chromium not found. Please install dependencies:\n` +
+            `sudo apt-get update\n` +
+            `sudo apt-get install -y chromium-browser chromium-chromedriver\n` +
+            `Or set PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true and install Chrome manually`
+          );
+        }
+        
+        if (launchError.message.includes('No space left on device')) {
+          throw new Error(`No disk space available. Please free up space on the server.`);
+        }
+        
+        if (launchError.message.includes('ENOENT')) {
+          throw new Error(`Required system dependencies missing. Install with:\n` +
+            `sudo apt-get install -y \\\n` +
+            `  ca-certificates \\\n` +
+            `  fonts-liberation \\\n` +
+            `  libappindicator3-1 \\\n` +
+            `  libasound2 \\\n` +
+            `  libatk-bridge2.0-0 \\\n` +
+            `  libatk1.0-0 \\\n` +
+            `  libc6 \\\n` +
+            `  libcairo2 \\\n` +
+            `  libcups2 \\\n` +
+            `  libdbus-1-3 \\\n` +
+            `  libexpat1 \\\n` +
+            `  libfontconfig1 \\\n` +
+            `  libgbm1 \\\n` +
+            `  libgcc1 \\\n` +
+            `  libglib2.0-0 \\\n` +
+            `  libgtk-3-0 \\\n` +
+            `  libnspr4 \\\n` +
+            `  libnss3 \\\n` +
+            `  libpango-1.0-0 \\\n` +
+            `  libpangocairo-1.0-0 \\\n` +
+            `  libstdc++6 \\\n` +
+            `  libx11-6 \\\n` +
+            `  libx11-xcb1 \\\n` +
+            `  libxcb1 \\\n` +
+            `  libxcomposite1 \\\n` +
+            `  libxcursor1 \\\n` +
+            `  libxdamage1 \\\n` +
+            `  libxext6 \\\n` +
+            `  libxfixes3 \\\n` +
+            `  libxi6 \\\n` +
+            `  libxrandr2 \\\n` +
+            `  libxrender1 \\\n` +
+            `  libxss1 \\\n` +
+            `  libxtst6 \\\n` +
+            `  lsb-release \\\n` +
+            `  wget \\\n` +
+            `  xdg-utils`);
+        }
+        
+        throw launchError;
+      }
+      
+      if (!browser) {
+        throw new Error('Browser failed to launch');
+      }
+      
+      page = await browser.newPage();
+      console.log(`✅ Page created`);
+    } catch (setupError: any) {
+      console.error(`❌ Browser setup failed:`, setupError);
+      if (browser) {
+        try {
+          await browser.close();
+        } catch (closeError) {
+          console.error(`Error closing browser:`, closeError);
+        }
+      }
+      throw setupError;
+    }
 
     try {
       // КРИТИЧНО: Аутентификация прокси должна быть установлена ДО любых других действий
@@ -842,10 +944,47 @@ export class SlotScreenshotService {
       
       return filepath;
     } catch (error: any) {
-      console.error(`Error taking screenshot for GEO ${geo}:`, error.message);
+      console.error(`\n❌ Error taking screenshot for GEO ${geo}`);
+      console.error(`Error type: ${error.name || 'Unknown'}`);
+      console.error(`Error message: ${error.message}`);
+      console.error(`Error code: ${(error as any).code || 'N/A'}`);
+      console.error(`Error stack (first 500 chars):`, error.stack?.substring(0, 500));
+      
+      // Дополнительная диагностика
+      if (error.message.includes('timeout')) {
+        console.error(`\n💡 Timeout issue detected. Possible causes:`);
+        console.error(`1. Proxy connection is slow or blocked`);
+        console.error(`2. Target website is blocking requests from Russia`);
+        console.error(`3. Network connectivity issues`);
+        console.error(`4. Proxy server is down or unreachable`);
+      }
+      
+      if (error.message.includes('net::ERR_')) {
+        console.error(`\n💡 Network error detected. Possible causes:`);
+        console.error(`1. Proxy authentication failed`);
+        console.error(`2. Target website blocked the proxy IP`);
+        console.error(`3. DNS resolution failed`);
+        console.error(`4. SSL/TLS certificate issues`);
+      }
+      
+      if (error.message.includes('Target closed') || error.message.includes('Session closed')) {
+        console.error(`\n💡 Browser closed unexpectedly. Possible causes:`);
+        console.error(`1. Out of memory (check: free -h)`);
+        console.error(`2. Browser crashed`);
+        console.error(`3. System killed the process`);
+      }
+      
       throw new Error(`Failed to take screenshot: ${error.message}`);
     } finally {
-      await browser.close();
+      if (browser) {
+        try {
+          console.log(`Closing browser...`);
+          await browser.close();
+          console.log(`✅ Browser closed`);
+        } catch (closeError: any) {
+          console.error(`Error closing browser:`, closeError.message);
+        }
+      }
     }
   }
 }
