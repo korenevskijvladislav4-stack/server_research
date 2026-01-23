@@ -27,12 +27,73 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware
-app.use(helmet());
+// CORS configuration - разрешаем запросы с клиентского домена
+// Должно быть ДО helmet, чтобы CORS заголовки не блокировались
+const allowedOrigins = process.env.CORS_ORIGIN 
+  ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
+  : ['http://localhost:3000', 'http://research.supporthelper.website'];
+
+console.log('Allowed CORS origins:', allowedOrigins);
+
+// Функция для нормализации origin (убирает путь, оставляет только протокол + домен)
+const normalizeOrigin = (origin: string): string => {
+  try {
+    const url = new URL(origin);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return origin;
+  }
+};
+
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
-  credentials: true
+  origin: (origin, callback) => {
+    // Разрешаем запросы без origin (например, Postman, мобильные приложения)
+    if (!origin) {
+      return callback(null, true);
+    }
+    
+    // Нормализуем origin (убираем путь, оставляем только домен)
+    const normalizedOrigin = normalizeOrigin(origin);
+    
+    // Проверяем, есть ли origin в списке разрешенных (сравниваем и оригинальный, и нормализованный)
+    const isAllowed = allowedOrigins.some(allowed => {
+      const normalizedAllowed = normalizeOrigin(allowed);
+      return origin === allowed || normalizedOrigin === normalizedAllowed;
+    });
+    
+    if (isAllowed) {
+      // Возвращаем нормализованный origin в заголовке (без пути)
+      callback(null, normalizedOrigin);
+    } else {
+      // Логируем для отладки
+      console.log('CORS blocked origin:', origin, '(normalized:', normalizedOrigin, ')');
+      console.log('Allowed origins:', allowedOrigins);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204,
 }));
+
+// Настройка Helmet с учетом CORS
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginEmbedderPolicy: false,
+  // Отключаем некоторые политики, которые могут конфликтовать с CORS
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https:"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"],
+    },
+  },
+}));
+
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
