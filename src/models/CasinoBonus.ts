@@ -36,7 +36,19 @@ export interface CasinoBonus {
   // Общие поля
   min_deposit?: number;
   max_bonus?: number;
-  max_cashout?: number;
+  max_cashout?: number; // устаревшее, для обратной совместимости; для кэш — см. max_win_cash_*
+  /** Максвин по кэш-бонусу: значение (фикс. сумма или коэффициент) */
+  max_win_cash_value?: number | null;
+  /** Максвин по кэш-бонусу: тип — фиксированная сумма или коэффициент */
+  max_win_cash_unit?: 'fixed' | 'coefficient' | null;
+  /** Максвин для фриспинов: значение (фикс. сумма или коэффициент) */
+  max_win_freespin_value?: number | null;
+  /** Максвин для фриспинов: тип — фиксированная сумма или коэффициент */
+  max_win_freespin_unit?: 'fixed' | 'coefficient' | null;
+  /** Максвин для процентной части (в комбо): значение */
+  max_win_percent_value?: number | null;
+  /** Максвин для процентной части: тип — фикс. сумма или коэффициент */
+  max_win_percent_unit?: 'fixed' | 'coefficient' | null;
   wagering_requirement?: number;
   wagering_games?: string; // free-text, e.g. "slots only"
   promo_code?: string;

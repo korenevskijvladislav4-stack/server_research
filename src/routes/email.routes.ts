@@ -5,6 +5,7 @@ import { authenticate } from '../middleware/auth.middleware';
 const router = Router();
 
 router.get('/', authenticate, emailController.getAllEmails);
+router.get('/recipients', authenticate, emailController.getEmailRecipients);
 router.get('/:id', authenticate, emailController.getEmailById);
 router.post('/sync', authenticate, emailController.syncEmails);
 router.patch('/:id/read', authenticate, emailController.markEmailAsRead);

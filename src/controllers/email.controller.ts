@@ -58,9 +58,24 @@ const emailMatchesCasino = (email: Email, casinoNorm: string): boolean => {
   return false;
 };
 
+export const getEmailRecipients = async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const connection = await pool.getConnection();
+    const [rows] = await connection.query<RowDataPacket[]>(
+      `SELECT DISTINCT to_email FROM emails WHERE to_email IS NOT NULL AND TRIM(to_email) != '' ORDER BY to_email`
+    );
+    connection.release();
+    const recipients = (rows as { to_email: string }[]).map((r) => r.to_email);
+    res.json(recipients);
+  } catch (error) {
+    console.error('Error fetching email recipients:', error);
+    res.status(500).json({ error: 'Failed to fetch recipients' });
+  }
+};
+
 export const getAllEmails = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { limit = 50, offset = 0, is_read, related_casino_id } = req.query;
+    const { limit = 50, offset = 0, is_read, related_casino_id, to_email } = req.query;
     const connection = await pool.getConnection();
     
     // If filtering by casino, use name matching with normalization (same as getEmailsByCasinoNameMatch)
@@ -94,6 +109,10 @@ export const getAllEmails = async (req: Request, res: Response): Promise<void> =
           const isReadBool = is_read === 'true';
           matched = matched.filter((e) => e.is_read === isReadBool);
         }
+        // Apply to_email filter if specified
+        if (to_email && typeof to_email === 'string') {
+          matched = matched.filter((e) => e.to_email === to_email);
+        }
 
         const limitNum = parseInt(limit as string);
         const offsetNum = parseInt(offset as string);
@@ -123,6 +142,11 @@ export const getAllEmails = async (req: Request, res: Response): Promise<void> =
       whereClause += ' AND is_read = ?';
       params.push(is_read === 'true');
       countParams.push(is_read === 'true');
+    }
+    if (to_email && typeof to_email === 'string') {
+      whereClause += ' AND to_email = ?';
+      params.push(to_email);
+      countParams.push(to_email);
     }
 
     // Get total count
@@ -154,7 +178,7 @@ export const getAllEmails = async (req: Request, res: Response): Promise<void> =
 export const getEmailsByCasinoNameMatch = async (req: Request, res: Response): Promise<void> => {
   try {
     const { casinoId } = req.params;
-    const { limit = 50, offset = 0 } = req.query;
+    const { limit = 50, offset = 0, to_email } = req.query;
 
     const conn = await pool.getConnection();
     try {
@@ -179,7 +203,10 @@ export const getEmailsByCasinoNameMatch = async (req: Request, res: Response): P
 
       const allEmails = emailRows as unknown as Email[];
       // Filter using improved matching (check from_name, from_email, and domain)
-      const matched = allEmails.filter((e) => emailMatchesCasino(e, casinoNorm));
+      let matched = allEmails.filter((e) => emailMatchesCasino(e, casinoNorm));
+      if (to_email && typeof to_email === 'string') {
+        matched = matched.filter((e) => e.to_email === to_email);
+      }
 
       const limitNum = parseInt(limit as string);
       const offsetNum = parseInt(offset as string);

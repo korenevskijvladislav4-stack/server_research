@@ -185,6 +185,12 @@ export const createCasinoBonus = async (req: AuthRequest, res: Response): Promis
       min_deposit,
       max_bonus,
       max_cashout,
+      max_win_cash_value,
+      max_win_cash_unit,
+      max_win_freespin_value,
+      max_win_freespin_unit,
+      max_win_percent_value,
+      max_win_percent_unit,
       wagering_requirement,
       wagering_games,
       promo_code,
@@ -204,9 +210,9 @@ export const createCasinoBonus = async (req: AuthRequest, res: Response): Promis
       `INSERT INTO casino_bonuses 
        (casino_id, geo, name, bonus_category, bonus_kind, bonus_type, bonus_value, bonus_unit, currency, 
         freespins_count, freespin_value, freespin_game, cashback_percent, cashback_period,
-        min_deposit, max_bonus, max_cashout, wagering_requirement, wagering_games, 
-        promo_code, valid_from, valid_to, status, notes, created_by, updated_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        min_deposit, max_bonus, max_cashout, max_win_cash_value, max_win_cash_unit, max_win_freespin_value, max_win_freespin_unit, max_win_percent_value, max_win_percent_unit,
+        wagering_requirement, wagering_games, promo_code, valid_from, valid_to, status, notes, created_by, updated_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         casinoId,
         geo,
@@ -225,6 +231,12 @@ export const createCasinoBonus = async (req: AuthRequest, res: Response): Promis
         min_deposit ?? null,
         max_bonus ?? null,
         max_cashout ?? null,
+        max_win_cash_value ?? null,
+        max_win_cash_unit ?? null,
+        max_win_freespin_value ?? null,
+        max_win_freespin_unit ?? null,
+        max_win_percent_value ?? null,
+        max_win_percent_unit ?? null,
         wagering_requirement ?? null,
         wagering_games ?? null,
         promo_code ?? null,
@@ -261,7 +273,7 @@ export const updateCasinoBonus = async (req: AuthRequest, res: Response): Promis
     }
 
     const actorId = req.user?.id ?? null;
-    const patch = req.body ?? {};
+    const body = req.body ?? {};
 
     const conn = await pool.getConnection();
 
@@ -275,39 +287,54 @@ export const updateCasinoBonus = async (req: AuthRequest, res: Response): Promis
       return;
     }
 
-    const columns = [
-      'geo',
-      'name',
-      'bonus_category',
-      'bonus_kind',
-      'bonus_type',
-      'bonus_value',
-      'bonus_unit',
-      'currency',
-      'freespins_count',
-      'freespin_value',
-      'freespin_game',
-      'cashback_percent',
-      'cashback_period',
-      'min_deposit',
-      'max_bonus',
-      'max_cashout',
-      'wagering_requirement',
-      'wagering_games',
-      'promo_code',
-      'valid_from',
-      'valid_to',
-      'status',
-      'notes',
+    const toNum = (v: unknown): number | null =>
+      v === '' || v === undefined || v === null ? null : Number(v);
+    const toStr = (v: unknown): string | null =>
+      v === '' || v === undefined || v === null ? null : String(v);
+
+    // Все обновляемые колонки в фиксированном порядке (включая максвин)
+    const updateColumns: [string, unknown][] = [
+      ['geo', body.geo],
+      ['name', body.name],
+      ['bonus_category', body.bonus_category],
+      ['bonus_kind', body.bonus_kind],
+      ['bonus_type', body.bonus_type],
+      ['bonus_value', body.bonus_value],
+      ['bonus_unit', body.bonus_unit],
+      ['currency', body.currency],
+      ['freespins_count', body.freespins_count],
+      ['freespin_value', body.freespin_value],
+      ['freespin_game', body.freespin_game],
+      ['cashback_percent', body.cashback_percent],
+      ['cashback_period', body.cashback_period],
+      ['min_deposit', body.min_deposit],
+      ['max_bonus', body.max_bonus],
+      ['max_cashout', body.max_cashout],
+      ['max_win_cash_value', toNum(body.max_win_cash_value)],
+      ['max_win_cash_unit', toStr(body.max_win_cash_unit)],
+      ['max_win_freespin_value', toNum(body.max_win_freespin_value)],
+      ['max_win_freespin_unit', toStr(body.max_win_freespin_unit)],
+      ['max_win_percent_value', toNum(body.max_win_percent_value)],
+      ['max_win_percent_unit', toStr(body.max_win_percent_unit)],
+      ['wagering_requirement', body.wagering_requirement],
+      ['wagering_games', body.wagering_games],
+      ['promo_code', body.promo_code],
+      ['valid_from', body.valid_from],
+      ['valid_to', body.valid_to],
+      ['status', body.status],
+      ['notes', body.notes],
     ];
 
     const sets: string[] = [];
     const values: any[] = [];
-
-    for (const c of columns) {
-      if (Object.prototype.hasOwnProperty.call(patch, c)) {
-        sets.push(`${c} = ?`);
-        values.push((patch as any)[c]);
+    const maxWinCols = ['max_win_cash_value', 'max_win_cash_unit', 'max_win_freespin_value', 'max_win_freespin_unit', 'max_win_percent_value', 'max_win_percent_unit'];
+    for (const [col, val] of updateColumns) {
+      if (maxWinCols.includes(col)) {
+        continue;
+      }
+      if (col in body) {
+        sets.push(`${col} = ?`);
+        values.push(val === undefined ? null : val);
       }
     }
 
@@ -315,15 +342,34 @@ export const updateCasinoBonus = async (req: AuthRequest, res: Response): Promis
     values.push(actorId);
     values.push(id, casinoId);
 
-    if (sets.length === 1) {
-      conn.release();
-      res.status(400).json({ error: 'No fields to update' });
-      return;
+    if (sets.length > 1) {
+      await conn.query(
+        `UPDATE casino_bonuses SET ${sets.join(', ')} WHERE id = ? AND casino_id = ?`,
+        values
+      );
     }
 
+    // Отдельный UPDATE только для полей максвина (гарантированно применяется из req.body)
+    const maxWinValues = [
+      toNum(body.max_win_cash_value),
+      toStr(body.max_win_cash_unit),
+      toNum(body.max_win_freespin_value),
+      toStr(body.max_win_freespin_unit),
+      toNum(body.max_win_percent_value),
+      toStr(body.max_win_percent_unit),
+      id,
+      casinoId,
+    ];
     await conn.query(
-      `UPDATE casino_bonuses SET ${sets.join(', ')} WHERE id = ? AND casino_id = ?`,
-      values
+      `UPDATE casino_bonuses SET
+        max_win_cash_value = ?,
+        max_win_cash_unit = ?,
+        max_win_freespin_value = ?,
+        max_win_freespin_unit = ?,
+        max_win_percent_value = ?,
+        max_win_percent_unit = ?
+      WHERE id = ? AND casino_id = ?`,
+      maxWinValues
     );
 
     const [rows] = await conn.query<RowDataPacket[]>(

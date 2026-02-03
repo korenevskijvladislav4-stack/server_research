@@ -372,6 +372,27 @@ const createTables = async () => {
       // Might fail if data exists with old values, that's ok
     }
 
+    // Add max_win columns for cash, freespins and percent part (combo), fixed or coefficient
+    const maxWinBonusColumns = [
+      { name: 'max_win_cash_value', def: 'DECIMAL(12,2) NULL AFTER max_cashout' },
+      { name: 'max_win_cash_unit', def: "VARCHAR(20) NULL AFTER max_win_cash_value" },
+      { name: 'max_win_freespin_value', def: 'DECIMAL(12,2) NULL AFTER max_win_cash_unit' },
+      { name: 'max_win_freespin_unit', def: "VARCHAR(20) NULL AFTER max_win_freespin_value" },
+      { name: 'max_win_percent_value', def: 'DECIMAL(12,2) NULL AFTER max_win_freespin_unit' },
+      { name: 'max_win_percent_unit', def: "VARCHAR(20) NULL AFTER max_win_percent_value" },
+    ];
+    for (const col of maxWinBonusColumns) {
+      const [colRows] = await connection.query<any[]>(`
+        SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'casino_bonuses' AND COLUMN_NAME = ?
+      `, [col.name]);
+      const colExists = Array.isArray(colRows) && colRows[0]?.cnt > 0;
+      if (!colExists) {
+        await connection.query(`ALTER TABLE casino_bonuses ADD COLUMN ${col.name} ${col.def}`);
+        console.log(`Added column ${col.name} to casino_bonuses`);
+      }
+    }
+
     // Casino payment methods per geo
     await connection.query(`
       CREATE TABLE IF NOT EXISTS casino_payments (

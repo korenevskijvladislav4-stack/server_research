@@ -29,8 +29,13 @@ const PORT = process.env.PORT || 5000;
 
 // CORS configuration - разрешаем запросы с клиентского домена
 // Должно быть ДО helmet, чтобы CORS заголовки не блокировались
-const allowedOrigins = process.env.CORS_ORIGIN 
-  ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
+// В production можно задать отдельно CORS_ORIGIN_PROD (иначе используется CORS_ORIGIN)
+const corsOriginRaw =
+  process.env.NODE_ENV === 'production' && process.env.CORS_ORIGIN_PROD
+    ? process.env.CORS_ORIGIN_PROD
+    : process.env.CORS_ORIGIN;
+const allowedOrigins = corsOriginRaw
+  ? corsOriginRaw.split(',').map((origin) => origin.trim())
   : ['http://localhost:3000'];
 
 console.log('Allowed CORS origins:', allowedOrigins);
