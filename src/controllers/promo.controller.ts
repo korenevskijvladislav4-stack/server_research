@@ -1,154 +1,121 @@
-import { Request, Response } from 'express';
-import { RowDataPacket } from 'mysql2';
-import pool from '../database/connection';
-import { PromoCampaign, CreatePromoDto, UpdatePromoDto } from '../models/PromoCampaign';
+/**
+ * Promo controller
+ */
 
+import { Request, Response } from 'express';
+import { promoService } from '../services/promo.service';
+import { CreatePromoDto, UpdatePromoDto } from '../models/PromoCampaign';
+import { parseQueryParams } from '../common/utils';
+
+/**
+ * Get all promos with pagination and filters
+ */
 export const getAllPromos = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { casino_id, geo } = req.query;
-    const connection = await pool.getConnection();
-    
-    let query = 'SELECT * FROM promo_campaigns';
-    const conditions: string[] = [];
-    const params: any[] = [];
-
-    if (casino_id) {
-      conditions.push('casino_id = ?');
-      params.push(casino_id);
-    }
-    if (geo) {
-      conditions.push('geo = ?');
-      params.push(geo);
-    }
-
-    if (conditions.length > 0) {
-      query += ' WHERE ' + conditions.join(' AND ');
-    }
-
-    query += ' ORDER BY created_at DESC';
-
-    const [rows] = await connection.query<RowDataPacket[]>(query, params);
-    connection.release();
-    res.json(rows as unknown as PromoCampaign[]);
-  } catch (error) {
+    const params = parseQueryParams(req.query);
+    const result = await promoService.findAll(params);
+    res.json(result);
+  } catch (error: any) {
     console.error('Error fetching promos:', error);
-    res.status(500).json({ error: 'Failed to fetch promos' });
+    res.status(500).json({
+      error: 'Failed to fetch promos',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
   }
 };
 
+/**
+ * Get promo by ID
+ */
 export const getPromoById = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const connection = await pool.getConnection();
-    const [rows] = await connection.query<RowDataPacket[]>(
-      'SELECT * FROM promo_campaigns WHERE id = ?',
-      [id]
-    );
-    connection.release();
+    const promo = await promoService.findById(id);
 
-    if (Array.isArray(rows) && rows.length === 0) {
+    if (!promo) {
       res.status(404).json({ error: 'Promo campaign not found' });
       return;
     }
 
-    res.json((rows as unknown as PromoCampaign[])[0]);
-  } catch (error) {
+    res.json(promo);
+  } catch (error: any) {
     console.error('Error fetching promo:', error);
-    res.status(500).json({ error: 'Failed to fetch promo campaign' });
+    res.status(500).json({
+      error: 'Failed to fetch promo campaign',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
   }
 };
 
+/**
+ * Create a new promo
+ */
 export const createPromo = async (req: Request, res: Response): Promise<void> => {
   try {
     const data: CreatePromoDto = req.body;
-    const connection = await pool.getConnection();
-    
-    const [result] = await connection.query(
-      `INSERT INTO promo_campaigns 
-       (casino_id, geo, title, description, start_date, end_date, promo_code, bonus_type, bonus_amount, wagering_requirement, status, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        data.casino_id,
-        data.geo || null,
-        data.title,
-        data.description || null,
-        data.start_date || null,
-        data.end_date || null,
-        data.promo_code || null,
-        data.bonus_type || null,
-        data.bonus_amount || null,
-        data.wagering_requirement || null,
-        data.status || 'upcoming',
-        (req as any).user?.id || null
-      ]
-    );
 
-    const insertId = (result as any).insertId;
-    const [newPromo] = await connection.query<RowDataPacket[]>(
-      'SELECT * FROM promo_campaigns WHERE id = ?',
-      [insertId]
-    );
-    
-    connection.release();
-    res.status(201).json((newPromo as unknown as PromoCampaign[])[0]);
-  } catch (error) {
+    if (!data.casino_id || !data.title) {
+      res.status(400).json({ error: 'Casino ID and title are required' });
+      return;
+    }
+
+    const userId = (req as any).user?.id;
+    const promo = await promoService.create(data, userId);
+
+    res.status(201).json(promo);
+  } catch (error: any) {
     console.error('Error creating promo:', error);
-    res.status(500).json({ error: 'Failed to create promo campaign' });
+    res.status(500).json({
+      error: 'Failed to create promo campaign',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
   }
 };
 
+/**
+ * Update a promo
+ */
 export const updatePromo = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
     const data: UpdatePromoDto = req.body;
-    const connection = await pool.getConnection();
 
-    const updateFields: string[] = [];
-    const values: any[] = [];
+    const promo = await promoService.update(id, data);
 
-    Object.keys(data).forEach((key) => {
-      if (data[key as keyof UpdatePromoDto] !== undefined) {
-        updateFields.push(`${key} = ?`);
-        values.push(data[key as keyof UpdatePromoDto]);
-      }
-    });
-
-    if (updateFields.length === 0) {
-      res.status(400).json({ error: 'No fields to update' });
+    if (!promo) {
+      res.status(404).json({ error: 'Promo campaign not found' });
       return;
     }
 
-    values.push(id);
-
-    await connection.query(
-      `UPDATE promo_campaigns SET ${updateFields.join(', ')} WHERE id = ?`,
-      values
-    );
-
-    const [updated] = await connection.query<RowDataPacket[]>(
-      'SELECT * FROM promo_campaigns WHERE id = ?',
-      [id]
-    );
-
-    connection.release();
-    res.json((updated as unknown as PromoCampaign[])[0]);
-  } catch (error) {
+    res.json(promo);
+  } catch (error: any) {
     console.error('Error updating promo:', error);
-    res.status(500).json({ error: 'Failed to update promo campaign' });
+    res.status(500).json({
+      error: 'Failed to update promo campaign',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
   }
 };
 
+/**
+ * Delete a promo
+ */
 export const deletePromo = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const connection = await pool.getConnection();
-    
-    await connection.query('DELETE FROM promo_campaigns WHERE id = ?', [id]);
-    connection.release();
-    
+    const deleted = await promoService.delete(id);
+
+    if (!deleted) {
+      res.status(404).json({ error: 'Promo campaign not found' });
+      return;
+    }
+
     res.json({ message: 'Promo campaign deleted successfully' });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error deleting promo:', error);
-    res.status(500).json({ error: 'Failed to delete promo campaign' });
+    res.status(500).json({
+      error: 'Failed to delete promo campaign',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
   }
 };

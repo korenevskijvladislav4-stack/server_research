@@ -378,6 +378,7 @@ const createTables = async () => {
         id INT AUTO_INCREMENT PRIMARY KEY,
         casino_id INT NOT NULL,
         geo VARCHAR(10) NOT NULL,
+        direction ENUM('deposit','withdrawal') NOT NULL DEFAULT 'deposit',
         type VARCHAR(100) NOT NULL,
         method VARCHAR(100) NOT NULL,
         min_amount DECIMAL(12,2) NULL,
@@ -391,12 +392,13 @@ const createTables = async () => {
         FOREIGN KEY (casino_id) REFERENCES casinos(id) ON DELETE CASCADE,
         FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
         FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
-        INDEX idx_casino_geo (casino_id, geo)
+        INDEX idx_casino_geo (casino_id, geo),
+        INDEX idx_direction (direction)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
     // Add new columns to casino_payments if they don't exist (for older databases)
-    const paymentColumns = ['min_amount', 'max_amount', 'currency'];
+    const paymentColumns = ['min_amount', 'max_amount', 'currency', 'direction'];
     for (const col of paymentColumns) {
       const [colRows] = await connection.query<any[]>(`
         SELECT COUNT(*) AS cnt
@@ -417,6 +419,9 @@ const createTables = async () => {
             break;
           case 'currency':
             colDef = 'VARCHAR(10) NULL AFTER max_amount';
+            break;
+          case 'direction':
+            colDef = "ENUM('deposit','withdrawal') NOT NULL DEFAULT 'deposit' AFTER geo";
             break;
         }
         if (colDef) {

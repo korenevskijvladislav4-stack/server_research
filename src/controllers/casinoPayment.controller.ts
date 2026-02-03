@@ -53,6 +53,7 @@ export const getAllPayments = async (req: Request, res: Response): Promise<void>
       geo,
       type,
       method,
+      direction,
       search,
       limit = 50,
       offset = 0,
@@ -69,6 +70,10 @@ export const getAllPayments = async (req: Request, res: Response): Promise<void>
     if (geo) {
       conditions.push('p.geo = ?');
       params.push(geo);
+    }
+    if (direction === 'deposit' || direction === 'withdrawal') {
+      conditions.push('p.direction = ?');
+      params.push(direction);
     }
     if (type) {
       conditions.push('p.type = ?');
@@ -136,7 +141,7 @@ export const listCasinoPayments = async (req: Request, res: Response): Promise<v
         params.push(String(geo));
       }
 
-      sql += ' ORDER BY geo, type, method';
+      sql += ' ORDER BY direction, geo, type, method';
 
       const [rows] = await conn.query<RowDataPacket[]>(sql, params);
       const payments = rows as unknown as CasinoPayment[];
@@ -155,6 +160,7 @@ export const createCasinoPayment = async (req: Request, res: Response): Promise<
     const { casinoId } = req.params;
     const body: CreateCasinoPaymentDto = req.body ?? {};
 
+    const directionVal = body.direction === 'withdrawal' ? 'withdrawal' : 'deposit';
     if (!body.geo || !body.type || !body.method) {
       res.status(400).json({ error: 'geo, type and method are required' });
       return;
@@ -165,12 +171,13 @@ export const createCasinoPayment = async (req: Request, res: Response): Promise<
       const [result] = await conn.query(
         `
         INSERT INTO casino_payments
-          (casino_id, geo, type, method, min_amount, max_amount, currency, notes, created_by, updated_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (casino_id, geo, direction, type, method, min_amount, max_amount, currency, notes, created_by, updated_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
         [
           Number(casinoId),
           body.geo,
+          directionVal,
           body.type,
           body.method,
           body.min_amount ?? null,
@@ -217,6 +224,10 @@ export const updateCasinoPayment = async (req: Request, res: Response): Promise<
       if (body.geo !== undefined) {
         fields.push('geo = ?');
         values.push(body.geo);
+      }
+      if (body.direction !== undefined) {
+        fields.push('direction = ?');
+        values.push(body.direction === 'withdrawal' ? 'withdrawal' : 'deposit');
       }
       if (body.type !== undefined) {
         fields.push('type = ?');

@@ -86,8 +86,23 @@ export class SlotScreenshotService {
     // Поддержка кастомного пути к Chromium (для VPS в России)
     const customExecutablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
     if (customExecutablePath) {
-      launchOptions.executablePath = customExecutablePath;
-      console.log(`Using custom Chromium path: ${customExecutablePath}`);
+      // Проверяем существование файла
+      try {
+        await fs.access(customExecutablePath);
+        launchOptions.executablePath = customExecutablePath;
+        console.log(`✅ Using custom Chromium path: ${customExecutablePath}`);
+      } catch (accessError: any) {
+        console.error(`❌ Chromium executable not found at: ${customExecutablePath}`);
+        console.error(`Error: ${accessError.message}`);
+        throw new Error(
+          `Chromium executable not found at ${customExecutablePath}. ` +
+          `Please install Chromium: sudo apt-get install -y chromium-browser\n` +
+          `Or check PUPPETEER_EXECUTABLE_PATH in .env file.`
+        );
+      }
+    } else {
+      console.log(`⚠️ PUPPETEER_EXECUTABLE_PATH not set. Puppeteer will try to use bundled Chromium.`);
+      console.log(`   For VPS in Russia, it's recommended to set: PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser`);
     }
 
     if (proxy) {
@@ -295,63 +310,63 @@ export class SlotScreenshotService {
         });
         
         // Проверяем типичные проблемы
-        if (launchError.message.includes('Executable doesn\'t exist') || 
-            launchError.message.includes('Could not find Chromium')) {
+        const errorMsg = launchError.message.toLowerCase();
+        
+        if (errorMsg.includes('executable doesn\'t exist') || 
+            errorMsg.includes('could not find chromium') ||
+            errorMsg.includes('failed to launch') ||
+            errorMsg.includes('no usable sandbox')) {
+          const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || 'not set';
           throw new Error(
-            `Chromium not found. Please install dependencies:\n` +
-            `sudo apt-get update\n` +
-            `sudo apt-get install -y chromium-browser chromium-chromedriver\n` +
-            `Or set PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true and install Chrome manually`
+            `Chromium not found or failed to launch.\n` +
+            `Current PUPPETEER_EXECUTABLE_PATH: ${executablePath}\n\n` +
+            `Solution for VPS in Russia:\n` +
+            `1. Install Chromium:\n` +
+            `   sudo apt-get update\n` +
+            `   sudo apt-get install -y chromium-browser chromium-chromedriver\n\n` +
+            `2. Find Chromium path:\n` +
+            `   which chromium-browser\n` +
+            `   # Usually: /usr/bin/chromium-browser\n\n` +
+            `3. Add to server/.env:\n` +
+            `   PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true\n` +
+            `   PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser\n\n` +
+            `4. Restart server:\n` +
+            `   pm2 restart research-crm`
           );
         }
         
-        if (launchError.message.includes('No space left on device')) {
-          throw new Error(`No disk space available. Please free up space on the server.`);
+        if (errorMsg.includes('no space left on device') || errorMsg.includes('enospc')) {
+          throw new Error(`No disk space available. Please free up space on the server.\nCheck with: df -h`);
         }
         
-        if (launchError.message.includes('ENOENT')) {
-          throw new Error(`Required system dependencies missing. Install with:\n` +
-            `sudo apt-get install -y \\\n` +
-            `  ca-certificates \\\n` +
-            `  fonts-liberation \\\n` +
-            `  libappindicator3-1 \\\n` +
-            `  libasound2 \\\n` +
-            `  libatk-bridge2.0-0 \\\n` +
-            `  libatk1.0-0 \\\n` +
-            `  libc6 \\\n` +
-            `  libcairo2 \\\n` +
-            `  libcups2 \\\n` +
-            `  libdbus-1-3 \\\n` +
-            `  libexpat1 \\\n` +
-            `  libfontconfig1 \\\n` +
-            `  libgbm1 \\\n` +
-            `  libgcc1 \\\n` +
-            `  libglib2.0-0 \\\n` +
-            `  libgtk-3-0 \\\n` +
-            `  libnspr4 \\\n` +
-            `  libnss3 \\\n` +
-            `  libpango-1.0-0 \\\n` +
-            `  libpangocairo-1.0-0 \\\n` +
-            `  libstdc++6 \\\n` +
-            `  libx11-6 \\\n` +
-            `  libx11-xcb1 \\\n` +
-            `  libxcb1 \\\n` +
-            `  libxcomposite1 \\\n` +
-            `  libxcursor1 \\\n` +
-            `  libxdamage1 \\\n` +
-            `  libxext6 \\\n` +
-            `  libxfixes3 \\\n` +
-            `  libxi6 \\\n` +
-            `  libxrandr2 \\\n` +
-            `  libxrender1 \\\n` +
-            `  libxss1 \\\n` +
-            `  libxtst6 \\\n` +
-            `  lsb-release \\\n` +
-            `  wget \\\n` +
-            `  xdg-utils`);
+        if (errorMsg.includes('enoent') || errorMsg.includes('no such file')) {
+          const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || 'default';
+          throw new Error(
+            `Chromium executable not found at: ${executablePath}\n\n` +
+            `Install Chromium:\n` +
+            `sudo apt-get install -y chromium-browser\n\n` +
+            `Then set in server/.env:\n` +
+            `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser`
+          );
         }
         
-        throw launchError;
+        if (errorMsg.includes('permission denied') || errorMsg.includes('eacces')) {
+          throw new Error(
+            `Permission denied when launching Chromium.\n` +
+            `Try: sudo chmod +x ${process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser'}`
+          );
+        }
+        
+        // Общая ошибка запуска
+        throw new Error(
+          `Failed to launch browser: ${launchError.message}\n\n` +
+          `Common solutions:\n` +
+          `1. Install Chromium: sudo apt-get install -y chromium-browser\n` +
+          `2. Set PUPPETEER_EXECUTABLE_PATH in server/.env\n` +
+          `3. Check server memory: free -h\n` +
+          `4. Check disk space: df -h\n` +
+          `5. Check logs: pm2 logs research-crm`
+        );
       }
       
       if (!browser) {
