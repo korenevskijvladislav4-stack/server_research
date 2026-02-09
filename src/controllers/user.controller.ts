@@ -3,6 +3,12 @@ import { RowDataPacket } from 'mysql2';
 import bcrypt from 'bcryptjs';
 import pool from '../database/connection';
 import { AuthRequest } from '../middleware/auth.middleware';
+import {
+  parseQueryParams,
+  buildWhereClause,
+  buildLimitClause,
+  calculateTotalPages,
+} from '../common/utils';
 
 export interface User {
   id: number;
@@ -30,16 +36,68 @@ export interface UpdateUserDto {
   is_active?: boolean;
 }
 
-export const getAllUsers = async (_req: AuthRequest, res: Response): Promise<void> => {
+export const getAllUsers = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const params = parseQueryParams(req.query);
+    const page = params.page ?? 1;
+    const pageSize = params.pageSize ?? 20;
+    const allowedSortFields = ['id', 'username', 'email', 'role', 'is_active', 'created_at', 'updated_at'];
+    const sortField =
+      params.sortField && allowedSortFields.includes(params.sortField) ? params.sortField : 'username';
+    const sortOrder = params.sortOrder === 'desc' ? 'DESC' : 'ASC';
+
+    const normalizedFilters = {
+      ...params.filters,
+      ...(req.query.role ? { role: req.query.role } : {}),
+      ...(req.query.is_active !== undefined ? { is_active: req.query.is_active } : {}),
+    };
+
     const connection = await pool.getConnection();
+    const conditions: string[] = [];
+    const queryParams: any[] = [];
+
+    if (normalizedFilters && Object.keys(normalizedFilters).length > 0) {
+      const { clause, params: whereParams } = buildWhereClause(normalizedFilters, ['role', 'is_active']);
+      if (clause) {
+        conditions.push(clause.replace('WHERE ', ''));
+        queryParams.push(...whereParams);
+      }
+    }
+
+    if (params.search) {
+      const searchPattern = `%${params.search}%`;
+      conditions.push('(username LIKE ? OR email LIKE ?)');
+      queryParams.push(searchPattern, searchPattern);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { clause: limitClause, params: limitParams } = buildLimitClause(page, pageSize);
+
+    const [countRows] = await connection.query<RowDataPacket[]>(
+      `SELECT COUNT(*) as total FROM users ${whereClause}`,
+      queryParams
+    );
+    const total = Number((countRows[0] as any)?.total ?? 0);
 
     const [rows] = await connection.query<RowDataPacket[]>(
-      'SELECT id, username, email, role, is_active, created_at, updated_at FROM users ORDER BY username'
+      `SELECT id, username, email, role, is_active, created_at, updated_at
+       FROM users
+       ${whereClause}
+       ORDER BY ${sortField} ${sortOrder}
+       ${limitClause}`,
+      [...queryParams, ...limitParams]
     );
 
     connection.release();
-    res.json(rows as unknown as User[]);
+    res.json({
+      data: rows as unknown as User[],
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages: calculateTotalPages(total, pageSize),
+      },
+    });
   } catch (error) {
     console.error('Error fetching users:', error);
     res.status(500).json({ error: 'Failed to fetch users' });

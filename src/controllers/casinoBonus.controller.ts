@@ -7,6 +7,12 @@ import pool from '../database/connection';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { CasinoBonus } from '../models/CasinoBonus';
 import { CasinoBonusImage } from '../models/CasinoBonusImage';
+import {
+  parseQueryParams,
+  buildWhereClause,
+  buildLimitClause,
+  calculateTotalPages,
+} from '../common/utils';
 
 // Configure storage for bonus images
 const uploadsRoot = path.join(__dirname, '..', '..', 'uploads');
@@ -45,50 +51,67 @@ const bonusImageUpload = multer({
 // Get all bonuses with filters (for global bonuses page)
 export const getAllBonuses = async (req: Request, res: Response): Promise<void> => {
   try {
-    const {
-      casino_id,
-      geo,
-      bonus_category,
-      bonus_kind,
-      bonus_type,
-      status,
-      search,
-      limit = 50,
-      offset = 0,
-    } = req.query;
+    const params = parseQueryParams(req.query);
+    const legacyLimit = Number(req.query.limit);
+    const legacyOffset = Number(req.query.offset);
+    const fallbackPageSize =
+      Number.isFinite(legacyLimit) && legacyLimit > 0 ? legacyLimit : undefined;
+    const fallbackPage =
+      Number.isFinite(legacyLimit) && legacyLimit > 0 && Number.isFinite(legacyOffset) && legacyOffset >= 0
+        ? Math.floor(legacyOffset / legacyLimit) + 1
+        : undefined;
+
+    const page = params.page ?? fallbackPage ?? 1;
+    const pageSize = params.pageSize ?? fallbackPageSize ?? 20;
+    const searchValue = params.search ?? (req.query.search as string | undefined);
+
+    const normalizedFilters = {
+      ...params.filters,
+      ...(req.query.casino_id ? { casino_id: req.query.casino_id } : {}),
+      ...(req.query.geo ? { geo: req.query.geo } : {}),
+      ...(req.query.bonus_category ? { bonus_category: req.query.bonus_category } : {}),
+      ...(req.query.bonus_kind ? { bonus_kind: req.query.bonus_kind } : {}),
+      ...(req.query.bonus_type ? { bonus_type: req.query.bonus_type } : {}),
+      ...(req.query.status ? { status: req.query.status } : {}),
+    };
+
+    const sortFieldMap: Record<string, string> = {
+      id: 'b.id',
+      casino_id: 'b.casino_id',
+      casino_name: 'c.name',
+      geo: 'b.geo',
+      name: 'b.name',
+      bonus_category: 'b.bonus_category',
+      bonus_kind: 'b.bonus_kind',
+      bonus_type: 'b.bonus_type',
+      status: 'b.status',
+      created_at: 'b.created_at',
+      updated_at: 'b.updated_at',
+    };
+    const sortField =
+      params.sortField && sortFieldMap[params.sortField] ? sortFieldMap[params.sortField] : 'b.created_at';
+    const sortOrder = req.query.sortOrder === 'asc' ? 'ASC' : 'DESC';
 
     const conn = await pool.getConnection();
     const conditions: string[] = [];
-    const params: any[] = [];
+    const queryParams: any[] = [];
 
-    if (casino_id) {
-      conditions.push('b.casino_id = ?');
-      params.push(casino_id);
+    if (normalizedFilters && Object.keys(normalizedFilters).length > 0) {
+      const { clause, params: filterParams } = buildWhereClause(
+        normalizedFilters,
+        ['casino_id', 'geo', 'bonus_category', 'bonus_kind', 'bonus_type', 'status'],
+        'b'
+      );
+      if (clause) {
+        conditions.push(clause.replace('WHERE ', ''));
+        queryParams.push(...filterParams);
+      }
     }
-    if (geo) {
-      conditions.push('b.geo = ?');
-      params.push(geo);
-    }
-    if (bonus_category) {
-      conditions.push('b.bonus_category = ?');
-      params.push(bonus_category);
-    }
-    if (bonus_kind) {
-      conditions.push('b.bonus_kind = ?');
-      params.push(bonus_kind);
-    }
-    if (bonus_type) {
-      conditions.push('b.bonus_type = ?');
-      params.push(bonus_type);
-    }
-    if (status) {
-      conditions.push('b.status = ?');
-      params.push(status);
-    }
-    if (search) {
+
+    if (searchValue) {
       conditions.push('(b.name LIKE ? OR b.promo_code LIKE ? OR c.name LIKE ?)');
-      const searchPattern = `%${search}%`;
-      params.push(searchPattern, searchPattern, searchPattern);
+      const searchPattern = `%${searchValue}%`;
+      queryParams.push(searchPattern, searchPattern, searchPattern);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -98,19 +121,20 @@ export const getAllBonuses = async (req: Request, res: Response): Promise<void> 
       `SELECT COUNT(*) as total FROM casino_bonuses b
        LEFT JOIN casinos c ON b.casino_id = c.id
        ${whereClause}`,
-      params
+      queryParams
     );
-    const total = (countResult[0] as any).total;
+    const total = Number((countResult[0] as any).total ?? 0);
 
     // Get data with pagination
-    const dataParams = [...params, parseInt(limit as string), parseInt(offset as string)];
+    const { clause: limitClause, params: limitParams } = buildLimitClause(page, pageSize);
+    const dataParams = [...queryParams, ...limitParams];
     const [rows] = await conn.query<RowDataPacket[]>(
       `SELECT b.*, c.name as casino_name
        FROM casino_bonuses b
        LEFT JOIN casinos c ON b.casino_id = c.id
        ${whereClause}
-       ORDER BY b.created_at DESC
-       LIMIT ? OFFSET ?`,
+       ORDER BY ${sortField} ${sortOrder}
+       ${limitClause}`,
       dataParams
     );
 
@@ -119,8 +143,14 @@ export const getAllBonuses = async (req: Request, res: Response): Promise<void> 
     res.json({
       data: rows,
       total,
-      limit: parseInt(limit as string),
-      offset: parseInt(offset as string),
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages: calculateTotalPages(total, pageSize),
+      },
     });
   } catch (e) {
     console.error('getAllBonuses error:', e);

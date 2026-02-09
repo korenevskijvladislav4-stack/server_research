@@ -7,7 +7,6 @@ import dotenv from 'dotenv';
 import { connectDatabase } from './database/connection';
 import { errorHandler } from './middleware/errorHandler';
 import casinoRoutes from './routes/casino.routes';
-import promoRoutes from './routes/promo.routes';
 import emailRoutes from './routes/email.routes';
 import authRoutes from './routes/auth.routes';
 import casinoProfileRoutes from './routes/casinoProfile.routes';
@@ -21,6 +20,10 @@ import profileContextRoutes from './routes/profileContext.routes';
 import profileSettingRoutes from './routes/profileSetting.routes';
 import casinoAccountRoutes from './routes/casinoAccount.routes';
 import slotSelectorRoutes from './routes/slotSelector.routes';
+import imapAccountRoutes from './routes/imapAccount.routes';
+import tagRoutes from './routes/tag.routes';
+import casinoHistoryRoutes from './routes/casinoHistory.routes';
+import { startEmailSyncScheduler } from './services/email-sync-scheduler.service';
 
 dotenv.config();
 
@@ -120,7 +123,7 @@ app.use('/api/uploads', express.static(uploadsPath, {
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/casinos', casinoRoutes);
-app.use('/api/promos', promoRoutes);
+
 app.use('/api/emails', emailRoutes);
 app.use('/api', casinoProfileRoutes);
 app.use('/api', casinoBonusRoutes);
@@ -133,6 +136,10 @@ app.use('/api/profile-contexts', profileContextRoutes);
 app.use('/api/profile-settings', profileSettingRoutes);
 app.use('/api', casinoAccountRoutes);
 app.use('/api', slotSelectorRoutes);
+app.use('/api/imap-accounts', imapAccountRoutes);
+
+app.use('/api', tagRoutes);
+app.use('/api', casinoHistoryRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => {
@@ -160,6 +167,9 @@ const startServer = async () => {
     await connectDatabase();
     app.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}`);
+
+      // Start background email sync (polls every 2 minutes)
+      startEmailSyncScheduler();
     });
   } catch (error) {
     console.error('Failed to start server:', error);

@@ -5,7 +5,11 @@ import pool from '../database/connection';
 
 dotenv.config();
 
-interface ImapConfig {
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface ImapConfig {
   host: string;
   port: number;
   user: string;
@@ -13,106 +17,119 @@ interface ImapConfig {
   tls: boolean;
 }
 
+export interface ImapOAuthConfig {
+  host: string;
+  port: number;
+  user: string;
+  xoauth2: string; // base64-encoded XOAUTH2 token
+  tls: boolean;
+}
+
+export type ImapConnectionConfig = ImapConfig | ImapOAuthConfig;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function isOAuthConfig(cfg: ImapConnectionConfig): cfg is ImapOAuthConfig {
+  return 'xoauth2' in cfg;
+}
+
+function buildConfigFromEnv(): ImapConfig {
+  return {
+    host: process.env.IMAP_HOST || 'imap.mail.ru',
+    port: parseInt(process.env.IMAP_PORT || '993'),
+    user: process.env.IMAP_USER || '',
+    password: process.env.IMAP_PASSWORD || '',
+    tls: process.env.IMAP_TLS !== 'false',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
 export class ImapService {
   private imap: Imap;
-  private config: ImapConfig;
+  private config: ImapConnectionConfig;
 
-  constructor() {
-    this.config = {
-      host: process.env.IMAP_HOST || 'imap.mail.ru',
-      port: parseInt(process.env.IMAP_PORT || '993'),
-      user: process.env.IMAP_USER || '',
-      password: process.env.IMAP_PASSWORD || '',
-      tls: process.env.IMAP_TLS !== 'false' // Default to true if not explicitly false
-    };
+  constructor(config?: ImapConnectionConfig) {
+    this.config = config ?? buildConfigFromEnv();
 
-    // Validate required configuration
-    if (!this.config.user || !this.config.password) {
-      throw new Error('IMAP_USER and IMAP_PASSWORD must be set in environment variables');
+    const user = this.config.user;
+    if (!user) {
+      throw new Error('IMAP user is required');
+    }
+
+    if (!isOAuthConfig(this.config) && !this.config.password) {
+      throw new Error('IMAP password is required (or use OAuth)');
     }
 
     const isSecurePort = this.config.port === 993 || this.config.port === 995;
-    
-    // Build IMAP configuration
-    // Note: For imap library v0.8.19, use 'tls: true' for port 993, not 'secure'
+
     const imapConfig: any = {
-      user: this.config.user,
-      password: this.config.password,
+      user,
       host: this.config.host,
       port: this.config.port,
-      connTimeout: 60000, // 60 seconds connection timeout
-      authTimeout: 60000, // 60 seconds authentication timeout
-      socketTimeout: 60000, // 60 seconds socket timeout (for read/write operations)
-      tlsOptions: { 
-        rejectUnauthorized: false
-      },
-      keepalive: {
-        interval: 10000,
-        idleInterval: 300000,
-        forceNoop: true
-      },
-      // Enable debug mode to see what's happening
-      debug: (info: string) => {
-        console.log('IMAP Debug:', info);
-      }
+      connTimeout: 60_000,
+      authTimeout: 60_000,
+      socketTimeout: 60_000,
+      tlsOptions: { rejectUnauthorized: false },
+      keepalive: { interval: 10_000, idleInterval: 300_000, forceNoop: true },
     };
 
-    // For imap library, use 'tls' option for secure connections
+    // Authentication: password or XOAUTH2
+    if (isOAuthConfig(this.config)) {
+      imapConfig.xoauth2 = this.config.xoauth2;
+    } else {
+      imapConfig.password = this.config.password;
+    }
+
     if (isSecurePort || this.config.tls) {
       imapConfig.tls = true;
     }
 
-      console.log('IMAP config:', {
-        host: imapConfig.host,
-        port: imapConfig.port,
-        user: imapConfig.user,
-        tls: imapConfig.tls,
-        connTimeout: imapConfig.connTimeout,
-        authTimeout: imapConfig.authTimeout,
-        socketTimeout: imapConfig.socketTimeout
-      });
-
     this.imap = new Imap(imapConfig);
   }
+
+  // -------------------------------------------------------------------------
+  // Connection
+  // -------------------------------------------------------------------------
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       let resolved = false;
       const startTime = Date.now();
 
-      console.log('Attempting IMAP connection to', this.config.host, 'on port', this.config.port);
+      console.log(
+        'Attempting IMAP connection to',
+        this.config.host,
+        'on port',
+        this.config.port,
+        isOAuthConfig(this.config) ? '(OAuth)' : '(password)',
+      );
 
-      // Set up connection timeout (longer timeout for authentication)
-      // Should be longer than authTimeout + connTimeout
       const timeout = setTimeout(() => {
         if (!resolved) {
           resolved = true;
           const elapsed = Date.now() - startTime;
-          const error = new Error(`IMAP connection timeout after ${Math.round(elapsed / 1000)} seconds`);
-          console.error('IMAP connection timeout - check credentials and network');
-          console.error('Connection details:', {
-            host: this.config.host,
-            port: this.config.port,
-            user: this.config.user,
-            elapsedSeconds: Math.round(elapsed / 1000)
-          });
-          console.error('This usually means:');
-          console.error('1. Server is not responding (check IMAP_HOST and IMAP_PORT)');
-          console.error('2. Credentials are incorrect (check IMAP_USER and IMAP_PASSWORD)');
-          console.error('3. Network/firewall is blocking the connection');
-          console.error('4. IMAP access is not enabled in account settings');
-          console.error('5. For Mail.ru: use password for external applications if 2FA is enabled');
+          const error = new Error(
+            `IMAP connection timeout after ${Math.round(elapsed / 1000)} seconds`,
+          );
+          console.error('IMAP connection timeout – check credentials and network');
           this.disconnect();
           reject(error);
         }
-      }, 70000); // 70 seconds total timeout (longer than authTimeout)
+      }, 70_000);
 
       this.imap.once('ready', () => {
         if (!resolved) {
           resolved = true;
           clearTimeout(timeout);
           const elapsed = Date.now() - startTime;
-          console.log(`IMAP connected and authenticated successfully in ${Math.round(elapsed / 1000)} seconds`);
+          console.log(
+            `IMAP connected and authenticated in ${Math.round(elapsed / 1000)}s`,
+          );
           resolve();
         }
       });
@@ -121,39 +138,23 @@ export class ImapService {
         if (!resolved) {
           resolved = true;
           clearTimeout(timeout);
-          const elapsed = Date.now() - startTime;
-          console.error(`IMAP connection error after ${Math.round(elapsed / 1000)} seconds:`, err);
-          console.error('Error details:', {
-            message: err.message,
-            stack: err.stack,
-            code: (err as any).code,
-            source: (err as any).source,
-            errno: (err as any).errno,
-            syscall: (err as any).syscall
-          });
+          console.error('IMAP connection error:', err.message);
           reject(err);
         }
       });
 
-      // Additional event listeners for debugging
       this.imap.on('alert', (alert: string) => {
         console.log('IMAP alert:', alert);
       });
 
-      // Listen for end event
       this.imap.once('end', () => {
         if (!resolved) {
           console.log('IMAP connection ended before ready');
-        } else {
-          console.log('IMAP connection ended');
         }
       });
 
       try {
-        console.log('Calling imap.connect()...');
-        const connectStart = Date.now();
         this.imap.connect();
-        console.log(`imap.connect() called (took ${Date.now() - connectStart}ms), waiting for ready/error event...`);
       } catch (err: any) {
         if (!resolved) {
           resolved = true;
@@ -165,17 +166,22 @@ export class ImapService {
     });
   }
 
+  // -------------------------------------------------------------------------
+  // Mailbox helpers
+  // -------------------------------------------------------------------------
+
   openInbox(): Promise<Imap.Box> {
     return new Promise((resolve, reject) => {
       this.imap.openBox('INBOX', false, (err, box) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(box);
-        }
+        if (err) reject(err);
+        else resolve(box);
       });
     });
   }
+
+  // -------------------------------------------------------------------------
+  // Fetch emails
+  // -------------------------------------------------------------------------
 
   async fetchEmails(limit: number = 50): Promise<any[]> {
     let connected = false;
@@ -189,28 +195,28 @@ export class ImapService {
         return [];
       }
 
-      // Fetch the most recent emails (last N messages)
-      // IMAP seq numbers: 1 is oldest, box.messages.total is newest
       const totalMessages = box.messages.total;
       const fetchCount = Math.min(limit, totalMessages);
       const startSeq = Math.max(1, totalMessages - fetchCount + 1);
       const endSeq = totalMessages;
-      
-      console.log(`Fetching emails: sequences ${startSeq} to ${endSeq} (most recent ${fetchCount} out of ${totalMessages} total)`);
+
+      console.log(
+        `Fetching emails: seq ${startSeq}–${endSeq} (${fetchCount} of ${totalMessages})`,
+      );
 
       return new Promise((resolve, reject) => {
         const fetch = this.imap.seq.fetch(`${startSeq}:${endSeq}`, {
           bodies: '',
-          struct: true
+          struct: true,
         });
 
         const emails: any[] = [];
         let processedCount = 0;
-        const totalMessages = fetchCount;
+        const expectedCount = fetchCount;
         const parsePromises: Promise<void>[] = [];
 
         const checkComplete = () => {
-          if (processedCount === totalMessages) {
+          if (processedCount === expectedCount) {
             Promise.all(parsePromises).finally(() => {
               setTimeout(() => {
                 this.disconnect();
@@ -243,21 +249,18 @@ export class ImapService {
                 }
 
                 let parsed;
-                // If we have chunks, use Buffer, otherwise use stream
                 if (chunks.length > 0) {
-                  const fullBuffer = Buffer.concat(chunks);
-                  parsed = await simpleParser(fullBuffer);
+                  parsed = await simpleParser(Buffer.concat(chunks));
                 } else if (bodyStream) {
                   parsed = await simpleParser(bodyStream);
                 } else {
                   throw new Error('No data to parse');
                 }
-                
-                // Extract 'to' addresses properly
-                const toAddress = parsed.to 
-                  ? (Array.isArray(parsed.to.value) 
-                      ? parsed.to.value.map((v: any) => v.address).join(', ')
-                      : (parsed.to.value && parsed.to.value[0]?.address) || '')
+
+                const toAddress = parsed.to
+                  ? Array.isArray(parsed.to.value)
+                    ? parsed.to.value.map((v: any) => v.address).join(', ')
+                    : parsed.to.value?.[0]?.address || ''
                   : '';
 
                 emails.push({
@@ -265,19 +268,22 @@ export class ImapService {
                   subject: parsed.subject || '',
                   from: {
                     email: parsed.from?.value?.[0]?.address || '',
-                    name: parsed.from?.value?.[0]?.name || ''
+                    name: parsed.from?.value?.[0]?.name || '',
                   },
                   to: toAddress,
                   text: parsed.text || '',
                   html: parsed.html || '',
-                  date: parsed.date || new Date()
+                  date: parsed.date || new Date(),
                 });
 
                 processedCount++;
                 checkComplete();
                 resolveParse();
               } catch (parseError: any) {
-                console.error(`Error parsing email ${seqno}:`, parseError?.message || parseError);
+                console.error(
+                  `Error parsing email ${seqno}:`,
+                  parseError?.message || parseError,
+                );
                 processedCount++;
                 checkComplete();
                 resolveParse();
@@ -295,76 +301,66 @@ export class ImapService {
         });
 
         fetch.once('end', () => {
-          // Set a timeout to resolve even if some messages didn't complete
           setTimeout(() => {
-            if (processedCount < totalMessages) {
-              console.warn(`Only processed ${processedCount} of ${totalMessages} messages`);
+            if (processedCount < expectedCount) {
+              console.warn(
+                `Only processed ${processedCount} of ${expectedCount} messages`,
+              );
             }
             this.disconnect();
             resolve(emails);
-          }, 5000); // 5 second timeout
+          }, 5000);
         });
       });
     } catch (error) {
       console.error('Error fetching emails:', error);
-      if (connected) {
-        this.disconnect();
-      }
+      if (connected) this.disconnect();
       throw error;
     }
   }
 
-  async syncEmailsToDatabase(): Promise<number> {
+  // -------------------------------------------------------------------------
+  // Sync to database
+  // -------------------------------------------------------------------------
+
+  async syncEmailsToDatabase(): Promise<{ synced: number; newIds: number[] }> {
     let connection;
     try {
-      console.log('Starting email sync...');
+      console.log('Starting email sync…');
       const emails = await this.fetchEmails(100);
       console.log(`Fetched ${emails?.length || 0} emails from IMAP`);
-      
+
       if (!emails || emails.length === 0) {
         console.log('No emails to sync');
-        return 0;
+        return { synced: 0, newIds: [] };
       }
 
       connection = await pool.getConnection();
       let syncedCount = 0;
       let skippedCount = 0;
       let errorCount = 0;
+      const newIds: number[] = [];
+
+      const MAX_TEXT_LENGTH = 16 * 1024 * 1024; // 16 MB
 
       for (const email of emails) {
         try {
-          // Skip if required fields are missing
           if (!email.messageId || !email.from?.email) {
-            console.warn('Skipping email with missing required fields:', {
-              messageId: email.messageId,
-              fromEmail: email.from?.email
-            });
             skippedCount++;
             continue;
           }
 
           const [existing] = await connection.query(
             'SELECT id FROM emails WHERE message_id = ?',
-            [email.messageId]
+            [email.messageId],
           );
 
           if (Array.isArray(existing) && existing.length === 0) {
-            // Truncate very long text fields to prevent issues (LONGTEXT can store up to 4GB, but we'll limit to 16MB for safety)
-            const MAX_TEXT_LENGTH = 16 * 1024 * 1024; // 16MB
-            
-            const bodyText = email.text || '';
-            const bodyHtml = email.html || '';
-            
-            const truncatedText = bodyText.length > MAX_TEXT_LENGTH 
-              ? bodyText.substring(0, MAX_TEXT_LENGTH) + '...[truncated]'
-              : bodyText;
-            
-            const truncatedHtml = bodyHtml.length > MAX_TEXT_LENGTH
-              ? bodyHtml.substring(0, MAX_TEXT_LENGTH) + '...[truncated]'
-              : bodyHtml;
+            const bodyText = (email.text || '').slice(0, MAX_TEXT_LENGTH);
+            const bodyHtml = (email.html || '').slice(0, MAX_TEXT_LENGTH);
 
-            await connection.query(
-              `INSERT INTO emails 
+            const [result] = await connection.query(
+              `INSERT INTO emails
                (message_id, subject, from_email, from_name, to_email, body_text, body_html, date_received)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
               [
@@ -373,57 +369,46 @@ export class ImapService {
                 email.from.email || '',
                 email.from.name || '',
                 email.to || '',
-                truncatedText,
-                truncatedHtml,
-                email.date || new Date()
-              ]
+                bodyText,
+                bodyHtml,
+                email.date || new Date(),
+              ],
             );
+            const insertId = (result as any).insertId;
+            if (insertId) newIds.push(insertId);
             syncedCount++;
           } else {
             skippedCount++;
-            // Log why it was skipped for debugging
-            if (skippedCount <= 5) {
-              console.log(`Skipping existing email: ${email.messageId?.substring(0, 50)}...`);
-            }
           }
         } catch (err: any) {
           errorCount++;
-          console.error('Error syncing email:', {
-            error: err?.message || err,
-            messageId: email.messageId,
-            sqlMessage: err?.sqlMessage
-          });
+          console.error('Error syncing email:', err?.message || err);
         }
       }
 
-      if (connection) {
-        connection.release();
-      }
-      
-      console.log(`Email sync completed: ${syncedCount} synced, ${skippedCount} skipped, ${errorCount} errors`);
-      
-      if (skippedCount === emails.length && syncedCount === 0) {
-        console.log('All emails were skipped - they may already be in the database');
-        console.log('This is normal if you have already synced these emails before');
-        console.log('Try syncing again after new emails arrive in your mailbox');
-      }
-      
-      return syncedCount;
+      connection.release();
+      console.log(
+        `Email sync completed: ${syncedCount} synced, ${skippedCount} skipped, ${errorCount} errors`,
+      );
+      return { synced: syncedCount, newIds };
     } catch (error: any) {
-      console.error('Error syncing emails to database:', {
-        error: error?.message || error,
-        stack: error?.stack
-      });
-      if (connection) {
-        connection.release();
-      }
+      console.error('Error syncing emails to database:', error?.message || error);
+      if (connection) connection.release();
       throw error;
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Disconnect
+  // -------------------------------------------------------------------------
+
   disconnect(): void {
     try {
-      if (this.imap && this.imap.state !== 'closed' && this.imap.state !== 'logout') {
+      if (
+        this.imap &&
+        this.imap.state !== 'closed' &&
+        this.imap.state !== 'logout'
+      ) {
         this.imap.end();
       }
     } catch (err) {

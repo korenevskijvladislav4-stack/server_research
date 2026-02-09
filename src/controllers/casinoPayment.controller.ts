@@ -10,6 +10,12 @@ import {
   UpdateCasinoPaymentDto,
 } from '../models/CasinoPayment';
 import { CasinoPaymentImage } from '../models/CasinoPaymentImage';
+import {
+  parseQueryParams,
+  buildWhereClause,
+  buildLimitClause,
+  calculateTotalPages,
+} from '../common/utils';
 
 // Configure storage for payment images
 const uploadsRoot = path.join(__dirname, '..', '..', 'uploads');
@@ -48,45 +54,68 @@ const paymentImageUpload = multer({
 // Get all payments with filters (for global payments page)
 export const getAllPayments = async (req: Request, res: Response): Promise<void> => {
   try {
-    const {
-      casino_id,
-      geo,
-      type,
-      method,
-      direction,
-      search,
-      limit = 50,
-      offset = 0,
-    } = req.query;
+    const params = parseQueryParams(req.query);
+
+    const legacyLimit = Number(req.query.limit);
+    const legacyOffset = Number(req.query.offset);
+    const fallbackPageSize =
+      Number.isFinite(legacyLimit) && legacyLimit > 0 ? legacyLimit : undefined;
+    const fallbackPage =
+      Number.isFinite(legacyLimit) && legacyLimit > 0 && Number.isFinite(legacyOffset) && legacyOffset >= 0
+        ? Math.floor(legacyOffset / legacyLimit) + 1
+        : undefined;
+
+    const page = params.page ?? fallbackPage ?? 1;
+    const pageSize = params.pageSize ?? fallbackPageSize ?? 20;
+    const searchValue = params.search ?? (req.query.search as string | undefined);
+
+    const normalizedFilters = {
+      ...params.filters,
+      ...(req.query.casino_id ? { casino_id: req.query.casino_id } : {}),
+      ...(req.query.geo ? { geo: req.query.geo } : {}),
+      ...(req.query.type ? { type: req.query.type } : {}),
+      ...(req.query.method ? { method: req.query.method } : {}),
+      ...(req.query.direction ? { direction: req.query.direction } : {}),
+    };
+
+    const sortFieldMap: Record<string, string> = {
+      id: 'p.id',
+      casino_id: 'p.casino_id',
+      casino_name: 'c.name',
+      geo: 'p.geo',
+      direction: 'p.direction',
+      type: 'p.type',
+      method: 'p.method',
+      min_amount: 'p.min_amount',
+      max_amount: 'p.max_amount',
+      currency: 'p.currency',
+      created_at: 'p.created_at',
+      updated_at: 'p.updated_at',
+    };
+    const sortField =
+      params.sortField && sortFieldMap[params.sortField] ? sortFieldMap[params.sortField] : 'p.created_at';
+    const sortOrder = req.query.sortOrder === 'asc' ? 'ASC' : 'DESC';
 
     const conn = await pool.getConnection();
     const conditions: string[] = [];
-    const params: any[] = [];
+    const queryParams: any[] = [];
 
-    if (casino_id) {
-      conditions.push('p.casino_id = ?');
-      params.push(casino_id);
+    if (normalizedFilters && Object.keys(normalizedFilters).length > 0) {
+      const { clause, params: filterParams } = buildWhereClause(
+        normalizedFilters,
+        ['casino_id', 'geo', 'type', 'method', 'direction'],
+        'p'
+      );
+      if (clause) {
+        conditions.push(clause.replace('WHERE ', ''));
+        queryParams.push(...filterParams);
+      }
     }
-    if (geo) {
-      conditions.push('p.geo = ?');
-      params.push(geo);
-    }
-    if (direction === 'deposit' || direction === 'withdrawal') {
-      conditions.push('p.direction = ?');
-      params.push(direction);
-    }
-    if (type) {
-      conditions.push('p.type = ?');
-      params.push(type);
-    }
-    if (method) {
-      conditions.push('p.method = ?');
-      params.push(method);
-    }
-    if (search) {
+
+    if (searchValue) {
       conditions.push('(p.type LIKE ? OR p.method LIKE ? OR c.name LIKE ?)');
-      const searchPattern = `%${search}%`;
-      params.push(searchPattern, searchPattern, searchPattern);
+      const searchPattern = `%${searchValue}%`;
+      queryParams.push(searchPattern, searchPattern, searchPattern);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -96,19 +125,20 @@ export const getAllPayments = async (req: Request, res: Response): Promise<void>
       `SELECT COUNT(*) as total FROM casino_payments p
        LEFT JOIN casinos c ON p.casino_id = c.id
        ${whereClause}`,
-      params
+      queryParams
     );
-    const total = (countResult[0] as any).total;
+    const total = Number((countResult[0] as any).total ?? 0);
 
     // Get data with pagination
-    const dataParams = [...params, parseInt(limit as string), parseInt(offset as string)];
+    const { clause: limitClause, params: limitParams } = buildLimitClause(page, pageSize);
+    const dataParams = [...queryParams, ...limitParams];
     const [rows] = await conn.query<RowDataPacket[]>(
       `SELECT p.*, c.name as casino_name
        FROM casino_payments p
        LEFT JOIN casinos c ON p.casino_id = c.id
        ${whereClause}
-       ORDER BY p.created_at DESC
-       LIMIT ? OFFSET ?`,
+       ORDER BY ${sortField} ${sortOrder}
+       ${limitClause}`,
       dataParams
     );
 
@@ -117,8 +147,14 @@ export const getAllPayments = async (req: Request, res: Response): Promise<void>
     res.json({
       data: rows,
       total,
-      limit: parseInt(limit as string),
-      offset: parseInt(offset as string),
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages: calculateTotalPages(total, pageSize),
+      },
     });
   } catch (e) {
     console.error('getAllPayments error:', e);

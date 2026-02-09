@@ -1,168 +1,336 @@
 import { Request, Response } from 'express';
 import { RowDataPacket } from 'mysql2';
+import ExcelJS from 'exceljs';
 import pool from '../database/connection';
 import { ImapService } from '../services/imap.service';
+import { decryptPassword } from '../common/utils/crypto.utils';
+import {
+  refreshAccessToken,
+  buildXOAuth2Token,
+} from '../services/gmail-oauth.service';
 import { Email } from '../models/Email';
+import type { ConnectionType } from '../models/ImapAccount';
+import { summarizeEmailsByIds } from '../services/ai-summary.service';
+import { screenshotEmailsByIds } from '../services/email-screenshot.service';
 
-// Helper to normalize names for matching (remove emojis/special chars, lowercase)
+// ---------------------------------------------------------------------------
+// Name-matching helpers
+// ---------------------------------------------------------------------------
+
 const normalizeName = (value?: string | null): string => {
   if (!value) return '';
   let s = value.normalize('NFKD');
-  // Remove common emoji ranges
   s = s.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '');
-  // Keep only letters and numbers, collapse separators
   s = s.replace(/[^\p{L}\p{N}]+/gu, '').toLowerCase().trim();
   return s;
 };
 
-// Helper to extract domain from email (e.g., "info@casinoname.com" -> "casinoname")
 const extractDomainName = (email?: string | null): string => {
   if (!email) return '';
   const match = email.match(/@([^.]+)/);
-  if (match && match[1]) {
-    return normalizeName(match[1]);
-  }
-  return '';
+  return match?.[1] ? normalizeName(match[1]) : '';
 };
 
-// Check if email matches casino name (check both from_name and from_email domain)
 const emailMatchesCasino = (email: Email, casinoNorm: string): boolean => {
   if (!casinoNorm || casinoNorm.length === 0) return false;
-  
+
   const fromNameNorm = normalizeName(email.from_name);
   const fromEmailNorm = normalizeName(email.from_email);
   const domainName = extractDomainName(email.from_email);
-  
-  // Exact matches (most reliable)
-  if (fromNameNorm === casinoNorm || 
-      fromEmailNorm === casinoNorm || 
-      domainName === casinoNorm) {
+
+  if (
+    fromNameNorm === casinoNorm ||
+    fromEmailNorm === casinoNorm ||
+    domainName === casinoNorm
+  )
     return true;
-  }
-  
-  // Partial matches - only if both strings are meaningful (at least 4 chars)
-  // and one contains the other
+
   if (fromNameNorm.length >= 4 && casinoNorm.length >= 4) {
-    if (casinoNorm.includes(fromNameNorm) || fromNameNorm.includes(casinoNorm)) {
+    if (casinoNorm.includes(fromNameNorm) || fromNameNorm.includes(casinoNorm))
       return true;
-    }
   }
-  
-  // Check if domain name partially matches
+
   if (domainName.length >= 4 && casinoNorm.length >= 4) {
-    if (casinoNorm.includes(domainName) || domainName.includes(casinoNorm)) {
+    if (casinoNorm.includes(domainName) || domainName.includes(casinoNorm))
       return true;
-    }
   }
-  
+
   return false;
 };
 
+// ---------------------------------------------------------------------------
+// Auto-link: match unlinked emails to casinos by normalized name
+// ---------------------------------------------------------------------------
+
+export const autoLinkEmailsToCasinos = async (): Promise<number> => {
+  const [casinoRows] = await pool.query<RowDataPacket[]>(
+    'SELECT id, name FROM casinos',
+  );
+  const casinos = (casinoRows as { id: number; name: string }[]).map((c) => ({
+    id: c.id,
+    norm: normalizeName(c.name),
+  })).filter((c) => c.norm.length > 0);
+
+  if (casinos.length === 0) return 0;
+
+  const [emailRows] = await pool.query<RowDataPacket[]>(
+    'SELECT id, from_name, from_email FROM emails WHERE related_casino_id IS NULL',
+  );
+
+  if (!Array.isArray(emailRows) || emailRows.length === 0) return 0;
+
+  let linked = 0;
+
+  for (const email of emailRows as unknown as Email[]) {
+    for (const casino of casinos) {
+      if (emailMatchesCasino(email, casino.norm)) {
+        await pool.query(
+          'UPDATE emails SET related_casino_id = ? WHERE id = ?',
+          [casino.id, email.id],
+        );
+        linked++;
+        break; // first match wins
+      }
+    }
+  }
+
+  if (linked > 0) {
+    console.log(`Auto-linked ${linked} emails to casinos`);
+  }
+  return linked;
+};
+
+// ---------------------------------------------------------------------------
+// Helper: build ImapService from an account row (IMAP or OAuth)
+// ---------------------------------------------------------------------------
+
+async function buildImapServiceForAccount(row: RowDataPacket): Promise<ImapService> {
+  const connectionType: ConnectionType = row.connection_type || 'imap';
+
+  if (connectionType === 'gmail_oauth') {
+    const refreshToken = decryptPassword(row.oauth_refresh_token_encrypted);
+    const accessToken = await refreshAccessToken(refreshToken);
+    const xoauth2 = buildXOAuth2Token(row.user, accessToken);
+
+    return new ImapService({
+      host: row.host,
+      port: row.port,
+      user: row.user,
+      xoauth2,
+      tls: true,
+    });
+  }
+
+  const password = decryptPassword(row.password_encrypted);
+  return new ImapService({
+    host: row.host,
+    port: row.port,
+    user: row.user,
+    password,
+    tls: !!row.tls,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Endpoints: recipients
+// ---------------------------------------------------------------------------
+
 export const getEmailRecipients = async (_req: Request, res: Response): Promise<void> => {
   try {
-    const connection = await pool.getConnection();
-    const [rows] = await connection.query<RowDataPacket[]>(
-      `SELECT DISTINCT to_email FROM emails WHERE to_email IS NOT NULL AND TRIM(to_email) != '' ORDER BY to_email`
+    // Return only emails that exist in casino_accounts
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT DISTINCT ca.email, ca.geo
+       FROM casino_accounts ca
+       WHERE ca.email IS NOT NULL AND TRIM(ca.email) != ''
+       ORDER BY ca.email`,
     );
-    connection.release();
-    const recipients = (rows as { to_email: string }[]).map((r) => r.to_email);
-    res.json(recipients);
+    // Return array of { email, geo } for richer filtering
+    res.json(
+      (rows as { email: string; geo: string }[]).map((r) => ({
+        email: r.email,
+        geo: r.geo,
+      })),
+    );
   } catch (error) {
     console.error('Error fetching email recipients:', error);
     res.status(500).json({ error: 'Failed to fetch recipients' });
   }
 };
 
+// ---------------------------------------------------------------------------
+// Analytics: email counts grouped by casino + date
+// ---------------------------------------------------------------------------
+
+export const getEmailAnalytics = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { date_from, date_to, to_email, geo } = req.query;
+
+    // Default: last 30 days
+    const now = new Date();
+    const defaultFrom = new Date(now);
+    defaultFrom.setDate(defaultFrom.getDate() - 29);
+
+    const from = date_from ? String(date_from) : defaultFrom.toISOString().slice(0, 10);
+    const to = date_to ? String(date_to) : now.toISOString().slice(0, 10);
+
+    let whereExtra = '';
+    let joinExtra = '';
+    const params: any[] = [from, to];
+
+    if (to_email && typeof to_email === 'string') {
+      whereExtra += ' AND e.to_email = ?';
+      params.push(to_email);
+    }
+
+    if (geo && typeof geo === 'string') {
+      joinExtra = ' LEFT JOIN casino_accounts ca ON ca.email = e.to_email';
+      whereExtra += ' AND ca.geo = ?';
+      params.push(geo);
+    }
+
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT
+         e.related_casino_id AS casino_id,
+         c.name              AS casino_name,
+         DATE_FORMAT(e.date_received, '%Y-%m-%d') AS dt,
+         CAST(COUNT(*) AS UNSIGNED) AS cnt
+       FROM emails e
+       LEFT JOIN casinos c ON c.id = e.related_casino_id
+       ${joinExtra}
+       WHERE e.related_casino_id IS NOT NULL
+         AND e.date_received IS NOT NULL
+         AND DATE(e.date_received) >= ?
+         AND DATE(e.date_received) <= ?
+         ${whereExtra}
+       GROUP BY e.related_casino_id, c.name, DATE_FORMAT(e.date_received, '%Y-%m-%d')
+       ORDER BY c.name, dt`,
+      params,
+    );
+
+    // Normalize types: cnt to number, dt to string
+    const data = (rows as any[]).map((r) => ({
+      casino_id: r.casino_id,
+      casino_name: r.casino_name || '',
+      dt: String(r.dt),
+      cnt: Number(r.cnt),
+    }));
+
+    res.json({ data, date_from: from, date_to: to });
+  } catch (error) {
+    console.error('Error fetching email analytics:', error);
+    res.status(500).json({ error: 'Failed to fetch email analytics' });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Endpoints: list / detail
+// ---------------------------------------------------------------------------
+
 export const getAllEmails = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { limit = 50, offset = 0, is_read, related_casino_id, to_email } = req.query;
+    const { limit = 50, offset = 0, is_read, related_casino_id, to_email, date_from, date_to, geo } = req.query;
     const connection = await pool.getConnection();
-    
-    // If filtering by casino, use name matching with normalization (same as getEmailsByCasinoNameMatch)
+
+    // Casino name-matching branch
     if (related_casino_id) {
       try {
-        // Get casino name
         const [casinoRows] = await connection.query<RowDataPacket[]>(
           'SELECT name FROM casinos WHERE id = ?',
-          [related_casino_id]
+          [related_casino_id],
         );
         if (!Array.isArray(casinoRows) || casinoRows.length === 0) {
           connection.release();
           res.status(404).json({ error: 'Casino not found' });
           return;
         }
-        const casinoName = (casinoRows[0] as any).name as string;
-        const casinoNorm = normalizeName(casinoName);
+        const casinoNorm = normalizeName((casinoRows[0] as any).name);
 
-        // Fetch emails - increase limit significantly or fetch all for better matching
         const [emailRows] = await connection.query<RowDataPacket[]>(
-          'SELECT * FROM emails ORDER BY date_received DESC LIMIT 10000'
+          'SELECT * FROM emails ORDER BY date_received DESC LIMIT 10000',
         );
         connection.release();
 
-        const allEmails = emailRows as unknown as Email[];
-        // Filter using improved matching (check from_name, from_email, and domain)
-        let matched = allEmails.filter((e) => emailMatchesCasino(e, casinoNorm));
-        
-        // Apply is_read filter if specified
-        if (is_read !== undefined) {
-          const isReadBool = is_read === 'true';
-          matched = matched.filter((e) => e.is_read === isReadBool);
-        }
-        // Apply to_email filter if specified
-        if (to_email && typeof to_email === 'string') {
+        let matched = (emailRows as unknown as Email[]).filter((e) =>
+          emailMatchesCasino(e, casinoNorm),
+        );
+        if (is_read !== undefined)
+          matched = matched.filter((e) => e.is_read === (is_read === 'true'));
+        if (to_email && typeof to_email === 'string')
           matched = matched.filter((e) => e.to_email === to_email);
-        }
+        if (date_from && typeof date_from === 'string')
+          matched = matched.filter((e) => {
+            if (!e.date_received) return false;
+            const d = new Date(e.date_received).toISOString().slice(0, 10);
+            return d >= date_from;
+          });
+        if (date_to && typeof date_to === 'string')
+          matched = matched.filter((e) => {
+            if (!e.date_received) return false;
+            const d = new Date(e.date_received).toISOString().slice(0, 10);
+            return d <= date_to;
+          });
 
-        const limitNum = parseInt(limit as string);
-        const offsetNum = parseInt(offset as string);
-        const pageData = matched.slice(offsetNum, offsetNum + limitNum);
-
+        const lim = parseInt(limit as string);
+        const off = parseInt(offset as string);
         res.json({
-          data: pageData,
+          data: matched.slice(off, off + lim),
           total: matched.length,
-          limit: limitNum,
-          offset: offsetNum,
+          limit: lim,
+          offset: off,
         });
         return;
       } catch (err) {
         connection.release();
-        console.error('Error in casino name matching:', err);
+        console.error('Casino name matching error:', err);
         res.status(500).json({ error: 'Failed to fetch emails for casino' });
         return;
       }
     }
 
-    // Standard SQL filtering when no casino filter
+    // Standard SQL filtering
+    let joinClause = '';
     let whereClause = 'WHERE 1=1';
     const params: any[] = [];
     const countParams: any[] = [];
 
     if (is_read !== undefined) {
-      whereClause += ' AND is_read = ?';
+      whereClause += ' AND e.is_read = ?';
       params.push(is_read === 'true');
       countParams.push(is_read === 'true');
     }
     if (to_email && typeof to_email === 'string') {
-      whereClause += ' AND to_email = ?';
+      whereClause += ' AND e.to_email = ?';
       params.push(to_email);
       countParams.push(to_email);
     }
+    if (date_from && typeof date_from === 'string') {
+      whereClause += ' AND DATE(e.date_received) >= ?';
+      params.push(date_from);
+      countParams.push(date_from);
+    }
+    if (date_to && typeof date_to === 'string') {
+      whereClause += ' AND DATE(e.date_received) <= ?';
+      params.push(date_to);
+      countParams.push(date_to);
+    }
+    if (geo && typeof geo === 'string') {
+      joinClause = ' LEFT JOIN casino_accounts ca ON ca.email = e.to_email';
+      whereClause += ' AND ca.geo = ?';
+      params.push(geo);
+      countParams.push(geo);
+    }
 
-    // Get total count
     const [countResult] = await connection.query<RowDataPacket[]>(
-      `SELECT COUNT(*) as total FROM emails ${whereClause}`,
-      countParams
+      `SELECT COUNT(*) as total FROM emails e ${joinClause} ${whereClause}`,
+      countParams,
     );
     const total = (countResult[0] as any).total;
 
-    // Get paginated results
-    const query = `SELECT * FROM emails ${whereClause} ORDER BY date_received DESC LIMIT ? OFFSET ?`;
+    const query = `SELECT e.* FROM emails e ${joinClause} ${whereClause} ORDER BY e.date_received DESC LIMIT ? OFFSET ?`;
     params.push(parseInt(limit as string), parseInt(offset as string));
-
     const [rows] = await connection.query<RowDataPacket[]>(query, params);
     connection.release();
-    
+
     res.json({
       data: rows as unknown as Email[],
       total,
@@ -175,48 +343,45 @@ export const getAllEmails = async (req: Request, res: Response): Promise<void> =
   }
 };
 
-export const getEmailsByCasinoNameMatch = async (req: Request, res: Response): Promise<void> => {
+export const getEmailsByCasinoNameMatch = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
   try {
     const { casinoId } = req.params;
     const { limit = 50, offset = 0, to_email } = req.query;
 
     const conn = await pool.getConnection();
     try {
-      // Get casino name
       const [casinoRows] = await conn.query<RowDataPacket[]>(
         'SELECT name FROM casinos WHERE id = ?',
-        [casinoId]
+        [casinoId],
       );
       if (!Array.isArray(casinoRows) || casinoRows.length === 0) {
         conn.release();
         res.status(404).json({ error: 'Casino not found' });
         return;
       }
-      const casinoName = (casinoRows[0] as any).name as string;
-      const casinoNorm = normalizeName(casinoName);
+      const casinoNorm = normalizeName((casinoRows[0] as any).name);
 
-      // Fetch emails - increase limit significantly or fetch all for better matching
       const [emailRows] = await conn.query<RowDataPacket[]>(
-        'SELECT * FROM emails ORDER BY date_received DESC LIMIT 10000'
+        'SELECT * FROM emails ORDER BY date_received DESC LIMIT 10000',
       );
       conn.release();
 
-      const allEmails = emailRows as unknown as Email[];
-      // Filter using improved matching (check from_name, from_email, and domain)
-      let matched = allEmails.filter((e) => emailMatchesCasino(e, casinoNorm));
-      if (to_email && typeof to_email === 'string') {
+      let matched = (emailRows as unknown as Email[]).filter((e) =>
+        emailMatchesCasino(e, casinoNorm),
+      );
+      if (to_email && typeof to_email === 'string')
         matched = matched.filter((e) => e.to_email === to_email);
-      }
 
-      const limitNum = parseInt(limit as string);
-      const offsetNum = parseInt(offset as string);
-      const pageData = matched.slice(offsetNum, offsetNum + limitNum);
-
+      const lim = parseInt(limit as string);
+      const off = parseInt(offset as string);
       res.json({
-        data: pageData,
+        data: matched.slice(off, off + lim),
         total: matched.length,
-        limit: limitNum,
-        offset: offsetNum,
+        limit: lim,
+        offset: off,
       });
     } catch (err) {
       conn.release();
@@ -231,18 +396,14 @@ export const getEmailsByCasinoNameMatch = async (req: Request, res: Response): P
 export const getEmailById = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const connection = await pool.getConnection();
-    const [rows] = await connection.query<RowDataPacket[]>(
+    const [rows] = await pool.query<RowDataPacket[]>(
       'SELECT * FROM emails WHERE id = ?',
-      [id]
+      [id],
     );
-    connection.release();
-
     if (Array.isArray(rows) && rows.length === 0) {
       res.status(404).json({ error: 'Email not found' });
       return;
     }
-
     res.json((rows as unknown as Email[])[0]);
   } catch (error) {
     console.error('Error fetching email:', error);
@@ -250,72 +411,176 @@ export const getEmailById = async (req: Request, res: Response): Promise<void> =
   }
 };
 
-export const syncEmails = async (_req: Request, res: Response): Promise<void> => {
-  let imapService: ImapService | null = null;
-  
+// ---------------------------------------------------------------------------
+// Sync
+// ---------------------------------------------------------------------------
+
+const formatSyncError = (error: any): string => {
+  const msg = error?.message ?? '';
+  if (msg.includes('Application-specific password') || msg.includes('185833')) {
+    return 'Для Gmail нужен пароль приложения, а не обычный пароль. Включите 2FA и создайте пароль приложения: https://support.google.com/accounts/answer/185833';
+  }
+  if (msg.includes('timeout') || error?.source === 'timeout-auth') {
+    return 'IMAP authentication timeout. Check host, port, credentials and firewall.';
+  }
+  if (error?.code === 'ECONNREFUSED') {
+    return 'Cannot connect to IMAP server. Check host, port and network.';
+  }
+  if (error?.code === 'EAUTH' || msg.includes('authentication')) {
+    return 'IMAP authentication failed. Check credentials and IMAP access.';
+  }
+  return msg || 'Sync failed';
+};
+
+export const syncEmails = async (req: Request, res: Response): Promise<void> => {
+  const accountIdParam = req.query.accountId as string | undefined;
+  const services: ImapService[] = [];
+
   try {
-    imapService = new ImapService();
-    const syncedCount = await imapService.syncEmailsToDatabase();
-    res.json({ message: `Synced ${syncedCount} new emails` });
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT id, name, connection_type, host, port, user, password_encrypted, oauth_refresh_token_encrypted, tls
+       FROM imap_accounts
+       WHERE is_active = 1 ${accountIdParam ? 'AND id = ?' : ''}
+       ORDER BY name`,
+      accountIdParam ? [accountIdParam] : [],
+    );
+
+    const accounts = Array.isArray(rows) ? rows : [];
+
+    if (accounts.length === 0) {
+      // Fallback to env-based config
+      const envUser = process.env.IMAP_USER;
+      const envPassword = process.env.IMAP_PASSWORD;
+      if (envUser && envPassword) {
+        const imapService = new ImapService();
+        services.push(imapService);
+        const { synced: syncedCount, newIds } = await imapService.syncEmailsToDatabase();
+        // AI-summarize and screenshot only new emails (fire & forget)
+        if (newIds.length > 0) {
+          summarizeEmailsByIds(newIds).catch((e) =>
+            console.error('AI summary error (non-fatal):', e),
+          );
+          screenshotEmailsByIds(newIds).catch((e) =>
+            console.error('Screenshot error (non-fatal):', e),
+          );
+        }
+        res.json({
+          message: `Synced ${syncedCount} new emails (env)`,
+          totalSynced: syncedCount,
+          results: [],
+        });
+        return;
+      }
+      res.status(400).json({
+        error: 'Нет настроенных аккаунтов. Добавьте аккаунт в «Почта → Настройки».',
+      });
+      return;
+    }
+
+    const results: {
+      accountId: number;
+      name: string;
+      synced: number;
+      error?: string;
+    }[] = [];
+    let totalSynced = 0;
+    const allNewIds: number[] = [];
+
+    for (const acc of accounts) {
+      let imapSvc: ImapService | null = null;
+      try {
+        imapSvc = await buildImapServiceForAccount(acc);
+        services.push(imapSvc);
+        const { synced, newIds } = await imapSvc.syncEmailsToDatabase();
+        totalSynced += synced;
+        allNewIds.push(...newIds);
+        results.push({ accountId: acc.id, name: acc.name, synced });
+      } catch (err: any) {
+        results.push({
+          accountId: acc.id,
+          name: acc.name,
+          synced: 0,
+          error: formatSyncError(err),
+        });
+      } finally {
+        if (imapSvc) {
+          try { imapSvc.disconnect(); } catch { /* ignore */ }
+        }
+      }
+    }
+
+    // Auto-link new emails to casinos
+    let linkedCount = 0;
+    try {
+      linkedCount = await autoLinkEmailsToCasinos();
+    } catch (e) {
+      console.error('Auto-link error (non-fatal):', e);
+    }
+
+    // AI-summarize and screenshot only newly synced emails (fire & forget)
+    if (allNewIds.length > 0) {
+      summarizeEmailsByIds(allNewIds).catch((e) =>
+        console.error('AI summary error (non-fatal):', e),
+      );
+      screenshotEmailsByIds(allNewIds).catch((e) =>
+        console.error('Screenshot error (non-fatal):', e),
+      );
+    }
+
+    res.json({
+      message: `Synced ${totalSynced} new emails from ${accounts.length} account(s)` +
+        (linkedCount > 0 ? `, auto-linked ${linkedCount}` : ''),
+      totalSynced,
+      linkedCount,
+      results,
+    });
   } catch (error: any) {
     console.error('Error syncing emails:', error);
-    
-    // Provide more specific error messages
-    let errorMessage = 'Failed to sync emails';
-    
-    if (error?.message?.includes('timeout') || error?.source === 'timeout-auth') {
-      errorMessage = 'IMAP authentication timeout. Please check:\n' +
-        '1. IMAP_HOST and IMAP_PORT are correct\n' +
-        '2. IMAP_USER and IMAP_PASSWORD are correct\n' +
-        '3. For Mail.ru: use password for external applications if 2FA is enabled\n' +
-        '4. For Gmail: use an App Password instead of regular password\n' +
-        '5. Check firewall/network settings\n' +
-        '6. Verify IMAP access is enabled in your email account settings';
-    } else if (error?.code === 'ECONNREFUSED') {
-      errorMessage = 'Cannot connect to IMAP server. Please check:\n' +
-        '1. IMAP_HOST and IMAP_PORT are correct\n' +
-        '2. Server is accessible from your network\n' +
-        '3. Firewall is not blocking the connection';
-    } else if (error?.code === 'EAUTH' || error?.message?.includes('authentication')) {
-      errorMessage = 'IMAP authentication failed. Please check:\n' +
-        '1. IMAP_USER and IMAP_PASSWORD are correct\n' +
-        '2. For Mail.ru: ensure you are using password for external applications (if 2FA enabled)\n' +
-        '3. For Gmail: ensure you are using an App Password (not your regular password)\n' +
-        '4. Check that IMAP is enabled in your email account settings\n' +
-        '5. Verify your account credentials are correct';
-    } else if (error?.message) {
-      errorMessage = `Failed to sync emails: ${error.message}`;
-    }
-    
-    res.status(500).json({ error: errorMessage });
+    res.status(500).json({ error: formatSyncError(error) });
   } finally {
-    // Ensure IMAP connection is closed
-    if (imapService) {
-      try {
-        imapService.disconnect();
-      } catch (disconnectError) {
-        console.error('Error disconnecting IMAP:', disconnectError);
-      }
+    for (const svc of services) {
+      try { svc.disconnect(); } catch { /* ignore */ }
     }
   }
 };
 
+// ---------------------------------------------------------------------------
+// Re-link: manually trigger auto-linking for all unlinked emails
+// ---------------------------------------------------------------------------
+
+export const relinkEmails = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const resetAll = req.query.reset === 'true';
+    if (resetAll) {
+      await pool.query('UPDATE emails SET related_casino_id = NULL');
+      console.log('Reset all related_casino_id to NULL');
+    }
+    const linked = await autoLinkEmailsToCasinos();
+    res.json({
+      message: resetAll
+        ? `Перепривязано ${linked} писем к казино`
+        : `Привязано ${linked} писем к казино`,
+      linked,
+      reset: resetAll,
+    });
+  } catch (error) {
+    console.error('Error relinking emails:', error);
+    res.status(500).json({ error: 'Failed to relink emails' });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Mutations
+// ---------------------------------------------------------------------------
+
 export const markEmailAsRead = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const connection = await pool.getConnection();
-    
-    await connection.query(
-      'UPDATE emails SET is_read = TRUE WHERE id = ?',
-      [id]
-    );
-
-    const [updated] = await connection.query<RowDataPacket[]>(
+    await pool.query('UPDATE emails SET is_read = TRUE WHERE id = ?', [id]);
+    const [updated] = await pool.query<RowDataPacket[]>(
       'SELECT * FROM emails WHERE id = ?',
-      [id]
+      [id],
     );
-
-    connection.release();
     res.json((updated as unknown as Email[])[0]);
   } catch (error) {
     console.error('Error marking email as read:', error);
@@ -327,19 +592,14 @@ export const linkEmailToCasino = async (req: Request, res: Response): Promise<vo
   try {
     const { id } = req.params;
     const { casino_id } = req.body;
-    const connection = await pool.getConnection();
-    
-    await connection.query(
-      'UPDATE emails SET related_casino_id = ? WHERE id = ?',
-      [casino_id, id]
-    );
-
-    const [updated] = await connection.query<RowDataPacket[]>(
+    await pool.query('UPDATE emails SET related_casino_id = ? WHERE id = ?', [
+      casino_id,
+      id,
+    ]);
+    const [updated] = await pool.query<RowDataPacket[]>(
       'SELECT * FROM emails WHERE id = ?',
-      [id]
+      [id],
     );
-
-    connection.release();
     res.json((updated as unknown as Email[])[0]);
   } catch (error) {
     console.error('Error linking email to casino:', error);
@@ -347,26 +607,213 @@ export const linkEmailToCasino = async (req: Request, res: Response): Promise<vo
   }
 };
 
-export const linkEmailToPromo = async (req: Request, res: Response): Promise<void> => {
+// ---------------------------------------------------------------------------
+// Manual: request AI summary for a single email
+// ---------------------------------------------------------------------------
+
+export const requestSummary = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const { promo_id } = req.body;
-    const connection = await pool.getConnection();
-    
-    await connection.query(
-      'UPDATE emails SET related_promo_id = ? WHERE id = ?',
-      [promo_id, id]
-    );
 
-    const [updated] = await connection.query<RowDataPacket[]>(
-      'SELECT * FROM emails WHERE id = ?',
-      [id]
-    );
+    // Clear existing summary so it gets regenerated
+    await pool.query('UPDATE emails SET ai_summary = NULL WHERE id = ?', [id]);
 
-    connection.release();
-    res.json((updated as unknown as Email[])[0]);
+    const { summarizeEmail } = await import('../services/ai-summary.service');
+    const summary = await summarizeEmail(Number(id));
+
+    if (!summary) {
+      res.status(500).json({ error: 'Не удалось получить саммари' });
+      return;
+    }
+
+    const [rows] = await pool.query<RowDataPacket[]>('SELECT * FROM emails WHERE id = ?', [id]);
+    res.json((rows as unknown as Email[])[0]);
   } catch (error) {
-    console.error('Error linking email to promo:', error);
-    res.status(500).json({ error: 'Failed to link email to promo' });
+    console.error('Error requesting summary:', error);
+    res.status(500).json({ error: 'Failed to generate summary' });
   }
 };
+
+// ---------------------------------------------------------------------------
+// Manual: take screenshot for a single email
+// ---------------------------------------------------------------------------
+
+export const requestScreenshot = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+
+    // Clear existing screenshot so it gets regenerated
+    await pool.query('UPDATE emails SET screenshot_url = NULL WHERE id = ?', [id]);
+
+    const { screenshotEmail } = await import('../services/email-screenshot.service');
+    const url = await screenshotEmail(Number(id));
+
+    if (!url) {
+      res.status(500).json({ error: 'Не удалось сделать скриншот' });
+      return;
+    }
+
+    const [rows] = await pool.query<RowDataPacket[]>('SELECT * FROM emails WHERE id = ?', [id]);
+    res.json((rows as unknown as Email[])[0]);
+  } catch (error) {
+    console.error('Error requesting screenshot:', error);
+    res.status(500).json({ error: 'Failed to generate screenshot' });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Export emails as XLSX
+// ---------------------------------------------------------------------------
+
+export const exportEmailsXlsx = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { related_casino_id, to_email, geo, date_from, date_to, is_read } = req.query;
+
+    // Build base URL for screenshot links
+    const proto = req.protocol;
+    const host = req.get('host') || 'localhost:5000';
+    const baseUrl = `${proto}://${host}`;
+
+    // Build query
+    let joinClause = '';
+    let whereClause = 'WHERE 1=1';
+    const params: any[] = [];
+
+    if (related_casino_id) {
+      whereClause += ' AND e.related_casino_id = ?';
+      params.push(related_casino_id);
+    }
+    if (to_email && typeof to_email === 'string') {
+      whereClause += ' AND e.to_email = ?';
+      params.push(to_email);
+    }
+    if (date_from && typeof date_from === 'string') {
+      whereClause += ' AND DATE(e.date_received) >= ?';
+      params.push(date_from);
+    }
+    if (date_to && typeof date_to === 'string') {
+      whereClause += ' AND DATE(e.date_received) <= ?';
+      params.push(date_to);
+    }
+    if (is_read !== undefined) {
+      whereClause += ' AND e.is_read = ?';
+      params.push(is_read === 'true');
+    }
+    if (geo && typeof geo === 'string') {
+      joinClause += ' LEFT JOIN casino_accounts ca_geo ON ca_geo.email = e.to_email AND ca_geo.geo = ?';
+      whereClause += ' AND ca_geo.id IS NOT NULL';
+      params.unshift(geo); // join param goes first
+    }
+
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT
+         e.id,
+         e.from_email,
+         e.from_name,
+         e.to_email,
+         e.subject,
+         e.date_received,
+         e.ai_summary,
+         e.screenshot_url,
+         e.related_casino_id,
+         c.name AS casino_name
+       FROM emails e
+       LEFT JOIN casinos c ON c.id = e.related_casino_id
+       ${joinClause}
+       ${whereClause}
+       ORDER BY e.date_received DESC
+       LIMIT 10000`,
+      params,
+    );
+
+    // For each email row, look up geo from casino_accounts by to_email
+    const emails = rows as any[];
+    const toEmails = [...new Set(emails.map((e) => e.to_email).filter(Boolean))];
+
+    // Batch fetch geo mapping
+    let geoMap: Record<string, string> = {};
+    if (toEmails.length > 0) {
+      const placeholders = toEmails.map(() => '?').join(',');
+      const [geoRows] = await pool.query<RowDataPacket[]>(
+        `SELECT email, geo FROM casino_accounts WHERE email IN (${placeholders})`,
+        toEmails,
+      );
+      for (const row of geoRows as { email: string; geo: string }[]) {
+        if (!geoMap[row.email]) {
+          geoMap[row.email] = row.geo;
+        }
+      }
+    }
+
+    // Build workbook
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Письма');
+
+    sheet.columns = [
+      { header: 'Проект', key: 'project', width: 25 },
+      { header: 'GEO', key: 'geo', width: 8 },
+      { header: 'Отправитель', key: 'sender', width: 35 },
+      { header: 'Получатель', key: 'recipient', width: 30 },
+      { header: 'Дата', key: 'date', width: 18 },
+      { header: 'Саммари', key: 'summary', width: 60 },
+      { header: 'Скриншот', key: 'screenshot', width: 50 },
+    ];
+
+    // Style header row
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF4472C4' },
+    };
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+
+    for (const email of emails) {
+      const senderDisplay = email.from_name
+        ? `${email.from_name} <${email.from_email}>`
+        : email.from_email || '';
+
+      const screenshotLink = email.screenshot_url
+        ? `${baseUrl}${email.screenshot_url}`
+        : '';
+
+      const dateStr = email.date_received
+        ? new Date(email.date_received).toISOString().slice(0, 16).replace('T', ' ')
+        : '';
+
+      sheet.addRow({
+        project: email.casino_name || '',
+        geo: geoMap[email.to_email] || '',
+        sender: senderDisplay,
+        recipient: email.to_email || '',
+        date: dateStr,
+        summary: email.ai_summary || '',
+        screenshot: screenshotLink,
+      });
+    }
+
+    // Make screenshot column a hyperlink
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      const cell = row.getCell('screenshot');
+      const url = cell.value as string;
+      if (url && url.startsWith('http')) {
+        cell.value = { text: 'Открыть', hyperlink: url };
+        cell.font = { color: { argb: 'FF0563C1' }, underline: true };
+      }
+    });
+
+    // Send file
+    const filename = `emails_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error('Error exporting emails:', error);
+    res.status(500).json({ error: 'Failed to export emails' });
+  }
+};
+

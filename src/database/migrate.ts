@@ -179,6 +179,40 @@ const createTables = async () => {
       }
     }
 
+    // Add ai_summary column to emails table
+    try {
+      const [aiSumCol] = await connection.query<any[]>(`
+        SELECT COUNT(*) AS cnt
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'emails'
+          AND COLUMN_NAME = 'ai_summary'
+      `);
+      if (Array.isArray(aiSumCol) && (aiSumCol[0] as any).cnt === 0) {
+        await connection.query(`ALTER TABLE emails ADD COLUMN ai_summary TEXT`);
+        console.log('Added ai_summary column to emails table');
+      }
+    } catch (err: any) {
+      console.error('Error adding ai_summary column:', err?.message || err);
+    }
+
+    // Add screenshot_url column to emails table
+    try {
+      const [scrCol] = await connection.query<any[]>(`
+        SELECT COUNT(*) AS cnt
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'emails'
+          AND COLUMN_NAME = 'screenshot_url'
+      `);
+      if (Array.isArray(scrCol) && (scrCol[0] as any).cnt === 0) {
+        await connection.query(`ALTER TABLE emails ADD COLUMN screenshot_url VARCHAR(500)`);
+        console.log('Added screenshot_url column to emails table');
+      }
+    } catch (err: any) {
+      console.error('Error adding screenshot_url column:', err?.message || err);
+    }
+
     // Email attachments table
     await connection.query(`
       CREATE TABLE IF NOT EXISTS email_attachments (
@@ -192,6 +226,56 @@ const createTables = async () => {
         FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+
+    // IMAP accounts (подключения почты с фронта)
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS imap_accounts (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        connection_type ENUM('imap','gmail_oauth') NOT NULL DEFAULT 'imap',
+        host VARCHAR(255) NOT NULL,
+        port INT NOT NULL DEFAULT 993,
+        user VARCHAR(255) NOT NULL,
+        password_encrypted TEXT NOT NULL,
+        oauth_refresh_token_encrypted TEXT NULL,
+        tls BOOLEAN NOT NULL DEFAULT TRUE,
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Migrate: add connection_type column if it doesn't exist
+    const [connTypeColRows] = await connection.query<any[]>(`
+      SELECT COUNT(*) AS cnt
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'imap_accounts'
+        AND COLUMN_NAME = 'connection_type'
+    `);
+    if (Array.isArray(connTypeColRows) && connTypeColRows[0]?.cnt === 0) {
+      await connection.query(`
+        ALTER TABLE imap_accounts
+        ADD COLUMN connection_type ENUM('imap','gmail_oauth') NOT NULL DEFAULT 'imap' AFTER name
+      `);
+      console.log('Added connection_type column to imap_accounts');
+    }
+
+    // Migrate: add oauth_refresh_token_encrypted column if it doesn't exist
+    const [oauthColRows] = await connection.query<any[]>(`
+      SELECT COUNT(*) AS cnt
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'imap_accounts'
+        AND COLUMN_NAME = 'oauth_refresh_token_encrypted'
+    `);
+    if (Array.isArray(oauthColRows) && oauthColRows[0]?.cnt === 0) {
+      await connection.query(`
+        ALTER TABLE imap_accounts
+        ADD COLUMN oauth_refresh_token_encrypted TEXT NULL AFTER password_encrypted
+      `);
+      console.log('Added oauth_refresh_token_encrypted column to imap_accounts');
+    }
 
     // Casino profile field definitions (editable by users/admins)
     await connection.query(`
@@ -745,6 +829,50 @@ const createTables = async () => {
     } catch (e: any) {
       // Ignore errors if table doesn't exist
     }
+
+    // Casino tasks (to-do per casino)
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS casino_tasks (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        casino_id INT NOT NULL,
+        title VARCHAR(500) NOT NULL,
+        description TEXT,
+        status ENUM('todo','in_progress','done','cancelled') NOT NULL DEFAULT 'todo',
+        priority ENUM('low','medium','high') NOT NULL DEFAULT 'medium',
+        assigned_to INT NULL,
+        due_date DATE NULL,
+        created_by INT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (casino_id) REFERENCES casinos(id) ON DELETE CASCADE,
+        FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL,
+        FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+        INDEX idx_casino_id (casino_id),
+        INDEX idx_status (status),
+        INDEX idx_assigned_to (assigned_to)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Tags
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS tags (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(100) UNIQUE NOT NULL,
+        color VARCHAR(20) DEFAULT '#1677ff',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Casino ↔ Tag junction
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS casino_tags (
+        casino_id INT NOT NULL,
+        tag_id INT NOT NULL,
+        PRIMARY KEY (casino_id, tag_id),
+        FOREIGN KEY (casino_id) REFERENCES casinos(id) ON DELETE CASCADE,
+        FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
 
     console.log('Database tables created successfully');
     connection.release();

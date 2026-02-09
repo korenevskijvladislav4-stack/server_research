@@ -11,7 +11,8 @@ export interface Email {
   is_read?: boolean;
   is_archived?: boolean;
   related_casino_id?: number;
-  related_promo_id?: number;
+  ai_summary?: string;
+  screenshot_url?: string;
   created_at?: Date;
 }
 
