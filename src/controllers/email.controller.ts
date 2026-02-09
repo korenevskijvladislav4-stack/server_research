@@ -132,6 +132,20 @@ async function buildImapServiceForAccount(row: RowDataPacket): Promise<ImapServi
 }
 
 // ---------------------------------------------------------------------------
+// Reusable: SELECT emails with geo & casino_name via proper JOINs
+// ---------------------------------------------------------------------------
+
+const EMAIL_BASE_SELECT = `
+  e.*, ca.geo AS geo, c.name AS casino_name
+`;
+
+const EMAIL_BASE_FROM = `
+  FROM emails e
+  LEFT JOIN casinos c ON c.id = e.related_casino_id
+  LEFT JOIN casino_accounts ca ON ca.email = e.to_email AND ca.casino_id = e.related_casino_id
+`;
+
+// ---------------------------------------------------------------------------
 // Endpoints: recipients
 // ---------------------------------------------------------------------------
 
@@ -183,7 +197,7 @@ export const getEmailAnalytics = async (req: Request, res: Response): Promise<vo
     }
 
     if (geo && typeof geo === 'string') {
-      joinExtra = ' LEFT JOIN casino_accounts ca ON ca.email = e.to_email';
+      joinExtra = ' LEFT JOIN casino_accounts ca ON ca.email = e.to_email AND ca.casino_id = e.related_casino_id';
       whereExtra += ' AND ca.geo = ?';
       params.push(geo);
     }
@@ -245,18 +259,26 @@ export const getAllEmails = async (req: Request, res: Response): Promise<void> =
         }
         const casinoNorm = normalizeName((casinoRows[0] as any).name);
 
+        // Use the FILTERED casino_id for GEO lookup, not e.related_casino_id
         const [emailRows] = await connection.query<RowDataPacket[]>(
-          'SELECT * FROM emails ORDER BY date_received DESC LIMIT 10000',
+          `SELECT e.*, ca.geo AS geo, c.name AS casino_name
+           FROM emails e
+           LEFT JOIN casinos c ON c.id = e.related_casino_id
+           LEFT JOIN casino_accounts ca ON ca.email = e.to_email AND ca.casino_id = ?
+           ORDER BY e.date_received DESC LIMIT 10000`,
+          [related_casino_id],
         );
         connection.release();
 
-        let matched = (emailRows as unknown as Email[]).filter((e) =>
+        let matched = (emailRows as unknown as (Email & { geo?: string; casino_name?: string })[]).filter((e) =>
           emailMatchesCasino(e, casinoNorm),
         );
         if (is_read !== undefined)
           matched = matched.filter((e) => e.is_read === (is_read === 'true'));
         if (to_email && typeof to_email === 'string')
           matched = matched.filter((e) => e.to_email === to_email);
+        if (geo && typeof geo === 'string')
+          matched = matched.filter((e) => e.geo === geo);
         if (date_from && typeof date_from === 'string')
           matched = matched.filter((e) => {
             if (!e.date_received) return false;
@@ -287,8 +309,7 @@ export const getAllEmails = async (req: Request, res: Response): Promise<void> =
       }
     }
 
-    // Standard SQL filtering
-    let joinClause = '';
+    // Standard SQL filtering — always JOIN casino_accounts + casinos for geo & casino_name
     let whereClause = 'WHERE 1=1';
     const params: any[] = [];
     const countParams: any[] = [];
@@ -314,25 +335,24 @@ export const getAllEmails = async (req: Request, res: Response): Promise<void> =
       countParams.push(date_to);
     }
     if (geo && typeof geo === 'string') {
-      joinClause = ' LEFT JOIN casino_accounts ca ON ca.email = e.to_email';
       whereClause += ' AND ca.geo = ?';
       params.push(geo);
       countParams.push(geo);
     }
 
     const [countResult] = await connection.query<RowDataPacket[]>(
-      `SELECT COUNT(*) as total FROM emails e ${joinClause} ${whereClause}`,
+      `SELECT COUNT(*) as total ${EMAIL_BASE_FROM} ${whereClause}`,
       countParams,
     );
     const total = (countResult[0] as any).total;
 
-    const query = `SELECT e.* FROM emails e ${joinClause} ${whereClause} ORDER BY e.date_received DESC LIMIT ? OFFSET ?`;
+    const query = `SELECT ${EMAIL_BASE_SELECT} ${EMAIL_BASE_FROM} ${whereClause} ORDER BY e.date_received DESC LIMIT ? OFFSET ?`;
     params.push(parseInt(limit as string), parseInt(offset as string));
     const [rows] = await connection.query<RowDataPacket[]>(query, params);
     connection.release();
 
     res.json({
-      data: rows as unknown as Email[],
+      data: rows,
       total,
       limit: parseInt(limit as string),
       offset: parseInt(offset as string),
@@ -365,11 +385,11 @@ export const getEmailsByCasinoNameMatch = async (
       const casinoNorm = normalizeName((casinoRows[0] as any).name);
 
       const [emailRows] = await conn.query<RowDataPacket[]>(
-        'SELECT * FROM emails ORDER BY date_received DESC LIMIT 10000',
+        `SELECT ${EMAIL_BASE_SELECT} ${EMAIL_BASE_FROM} ORDER BY e.date_received DESC LIMIT 10000`,
       );
       conn.release();
 
-      let matched = (emailRows as unknown as Email[]).filter((e) =>
+      let matched = (emailRows as unknown as (Email & { geo?: string; casino_name?: string })[]).filter((e) =>
         emailMatchesCasino(e, casinoNorm),
       );
       if (to_email && typeof to_email === 'string')
@@ -397,14 +417,14 @@ export const getEmailById = async (req: Request, res: Response): Promise<void> =
   try {
     const { id } = req.params;
     const [rows] = await pool.query<RowDataPacket[]>(
-      'SELECT * FROM emails WHERE id = ?',
+      `SELECT ${EMAIL_BASE_SELECT} ${EMAIL_BASE_FROM} WHERE e.id = ?`,
       [id],
     );
     if (Array.isArray(rows) && rows.length === 0) {
       res.status(404).json({ error: 'Email not found' });
       return;
     }
-    res.json((rows as unknown as Email[])[0]);
+    res.json(rows[0]);
   } catch (error) {
     console.error('Error fetching email:', error);
     res.status(500).json({ error: 'Failed to fetch email' });
@@ -578,10 +598,10 @@ export const markEmailAsRead = async (req: Request, res: Response): Promise<void
     const { id } = req.params;
     await pool.query('UPDATE emails SET is_read = TRUE WHERE id = ?', [id]);
     const [updated] = await pool.query<RowDataPacket[]>(
-      'SELECT * FROM emails WHERE id = ?',
+      `SELECT ${EMAIL_BASE_SELECT} ${EMAIL_BASE_FROM} WHERE e.id = ?`,
       [id],
     );
-    res.json((updated as unknown as Email[])[0]);
+    res.json(updated[0]);
   } catch (error) {
     console.error('Error marking email as read:', error);
     res.status(500).json({ error: 'Failed to mark email as read' });
@@ -597,10 +617,10 @@ export const linkEmailToCasino = async (req: Request, res: Response): Promise<vo
       id,
     ]);
     const [updated] = await pool.query<RowDataPacket[]>(
-      'SELECT * FROM emails WHERE id = ?',
+      `SELECT ${EMAIL_BASE_SELECT} ${EMAIL_BASE_FROM} WHERE e.id = ?`,
       [id],
     );
-    res.json((updated as unknown as Email[])[0]);
+    res.json(updated[0]);
   } catch (error) {
     console.error('Error linking email to casino:', error);
     res.status(500).json({ error: 'Failed to link email to casino' });
@@ -626,8 +646,11 @@ export const requestSummary = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    const [rows] = await pool.query<RowDataPacket[]>('SELECT * FROM emails WHERE id = ?', [id]);
-    res.json((rows as unknown as Email[])[0]);
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT ${EMAIL_BASE_SELECT} ${EMAIL_BASE_FROM} WHERE e.id = ?`,
+      [id],
+    );
+    res.json(rows[0]);
   } catch (error) {
     console.error('Error requesting summary:', error);
     res.status(500).json({ error: 'Failed to generate summary' });
@@ -653,8 +676,11 @@ export const requestScreenshot = async (req: Request, res: Response): Promise<vo
       return;
     }
 
-    const [rows] = await pool.query<RowDataPacket[]>('SELECT * FROM emails WHERE id = ?', [id]);
-    res.json((rows as unknown as Email[])[0]);
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `SELECT ${EMAIL_BASE_SELECT} ${EMAIL_BASE_FROM} WHERE e.id = ?`,
+      [id],
+    );
+    res.json(rows[0]);
   } catch (error) {
     console.error('Error requesting screenshot:', error);
     res.status(500).json({ error: 'Failed to generate screenshot' });
@@ -674,8 +700,7 @@ export const exportEmailsXlsx = async (req: Request, res: Response): Promise<voi
     const host = req.get('host') || 'localhost:5000';
     const baseUrl = `${proto}://${host}`;
 
-    // Build query
-    let joinClause = '';
+    // Build query — use base JOINs for geo & casino_name per project
     let whereClause = 'WHERE 1=1';
     const params: any[] = [];
 
@@ -700,9 +725,8 @@ export const exportEmailsXlsx = async (req: Request, res: Response): Promise<voi
       params.push(is_read === 'true');
     }
     if (geo && typeof geo === 'string') {
-      joinClause += ' LEFT JOIN casino_accounts ca_geo ON ca_geo.email = e.to_email AND ca_geo.geo = ?';
-      whereClause += ' AND ca_geo.id IS NOT NULL';
-      params.unshift(geo); // join param goes first
+      whereClause += ' AND ca.geo = ?';
+      params.push(geo);
     }
 
     const [rows] = await pool.query<RowDataPacket[]>(
@@ -716,34 +740,16 @@ export const exportEmailsXlsx = async (req: Request, res: Response): Promise<voi
          e.ai_summary,
          e.screenshot_url,
          e.related_casino_id,
-         c.name AS casino_name
-       FROM emails e
-       LEFT JOIN casinos c ON c.id = e.related_casino_id
-       ${joinClause}
+         c.name AS casino_name,
+         ca.geo AS geo
+       ${EMAIL_BASE_FROM}
        ${whereClause}
        ORDER BY e.date_received DESC
        LIMIT 10000`,
       params,
     );
 
-    // For each email row, look up geo from casino_accounts by to_email
     const emails = rows as any[];
-    const toEmails = [...new Set(emails.map((e) => e.to_email).filter(Boolean))];
-
-    // Batch fetch geo mapping
-    let geoMap: Record<string, string> = {};
-    if (toEmails.length > 0) {
-      const placeholders = toEmails.map(() => '?').join(',');
-      const [geoRows] = await pool.query<RowDataPacket[]>(
-        `SELECT email, geo FROM casino_accounts WHERE email IN (${placeholders})`,
-        toEmails,
-      );
-      for (const row of geoRows as { email: string; geo: string }[]) {
-        if (!geoMap[row.email]) {
-          geoMap[row.email] = row.geo;
-        }
-      }
-    }
 
     // Build workbook
     const workbook = new ExcelJS.Workbook();
@@ -784,7 +790,7 @@ export const exportEmailsXlsx = async (req: Request, res: Response): Promise<voi
 
       sheet.addRow({
         project: email.casino_name || '',
-        geo: geoMap[email.to_email] || '',
+        geo: email.geo || '',
         sender: senderDisplay,
         recipient: email.to_email || '',
         date: dateStr,
