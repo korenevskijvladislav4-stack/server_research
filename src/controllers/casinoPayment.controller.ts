@@ -3,6 +3,7 @@ import { RowDataPacket } from 'mysql2';
 import path from 'path';
 import fs from 'fs';
 import multer from 'multer';
+import ExcelJS from 'exceljs';
 import pool from '../database/connection';
 import {
   CasinoPayment,
@@ -159,6 +160,114 @@ export const getAllPayments = async (req: Request, res: Response): Promise<void>
   } catch (e) {
     console.error('getAllPayments error:', e);
     res.status(500).json({ error: 'Failed to load payments' });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Export payments as XLSX (with filters)
+// ---------------------------------------------------------------------------
+
+export const exportPaymentsXlsx = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const params = parseQueryParams(req.query);
+    const searchValue = params.search ?? (req.query.search as string | undefined);
+
+    const normalizedFilters = {
+      ...params.filters,
+      ...(req.query.casino_id ? { casino_id: req.query.casino_id } : {}),
+      ...(req.query.geo ? { geo: req.query.geo } : {}),
+      ...(req.query.type ? { type: req.query.type } : {}),
+      ...(req.query.method ? { method: req.query.method } : {}),
+      ...(req.query.direction ? { direction: req.query.direction } : {}),
+    };
+
+    const conn = await pool.getConnection();
+    const conditions: string[] = [];
+    const queryParams: any[] = [];
+
+    if (normalizedFilters && Object.keys(normalizedFilters).length > 0) {
+      const { clause, params: filterParams } = buildWhereClause(
+        normalizedFilters,
+        ['casino_id', 'geo', 'type', 'method', 'direction'],
+        'p'
+      );
+      if (clause) {
+        conditions.push(clause.replace('WHERE ', ''));
+        queryParams.push(...filterParams);
+      }
+    }
+
+    if (searchValue) {
+      conditions.push('(p.type LIKE ? OR p.method LIKE ? OR c.name LIKE ?)');
+      const searchPattern = `%${searchValue}%`;
+      queryParams.push(searchPattern, searchPattern, searchPattern);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT p.*, c.name as casino_name
+       FROM casino_payments p
+       LEFT JOIN casinos c ON p.casino_id = c.id
+       ${whereClause}
+       ORDER BY p.created_at DESC
+       LIMIT 10000`,
+      queryParams
+    );
+
+    conn.release();
+
+    const payments = rows as any[];
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Платежи');
+
+    sheet.columns = [
+      { header: 'ID', key: 'id', width: 8 },
+      { header: 'Казино', key: 'casino_name', width: 25 },
+      { header: 'ID казино', key: 'casino_id', width: 10 },
+      { header: 'GEO', key: 'geo', width: 8 },
+      { header: 'Направление', key: 'direction', width: 12 },
+      { header: 'Тип', key: 'type', width: 18 },
+      { header: 'Метод', key: 'method', width: 18 },
+      { header: 'Мин. сумма', key: 'min_amount', width: 14 },
+      { header: 'Макс. сумма', key: 'max_amount', width: 14 },
+      { header: 'Валюта', key: 'currency', width: 10 },
+      { header: 'Заметки', key: 'notes', width: 40 },
+      { header: 'Создано', key: 'created_at', width: 20 },
+      { header: 'Обновлено', key: 'updated_at', width: 20 },
+    ];
+
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true };
+
+    for (const p of payments) {
+      sheet.addRow({
+        id: p.id,
+        casino_name: p.casino_name || '',
+        casino_id: p.casino_id,
+        geo: p.geo,
+        direction: p.direction === 'withdrawal' ? 'Выплата' : 'Депозит',
+        type: p.type,
+        method: p.method,
+        min_amount: p.min_amount,
+        max_amount: p.max_amount,
+        currency: p.currency,
+        notes: p.notes,
+        created_at: p.created_at,
+        updated_at: p.updated_at,
+      });
+    }
+
+    const filename = `payments_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (e: any) {
+    console.error('exportPaymentsXlsx error:', e?.message || e);
+    res.status(500).json({ error: 'Failed to export payments' });
   }
 };
 

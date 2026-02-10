@@ -3,6 +3,7 @@ import { RowDataPacket } from 'mysql2';
 import path from 'path';
 import fs from 'fs';
 import multer from 'multer';
+import ExcelJS from 'exceljs';
 import pool from '../database/connection';
 import { AuthRequest } from '../middleware/auth.middleware';
 import { CasinoBonus } from '../models/CasinoBonus';
@@ -155,6 +156,163 @@ export const getAllBonuses = async (req: Request, res: Response): Promise<void> 
   } catch (e) {
     console.error('getAllBonuses error:', e);
     res.status(500).json({ error: 'Failed to load bonuses' });
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Export bonuses as XLSX (with filters)
+// ---------------------------------------------------------------------------
+
+export const exportBonusesXlsx = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const params = parseQueryParams(req.query);
+    const searchValue = params.search ?? (req.query.search as string | undefined);
+
+    const normalizedFilters = {
+      ...params.filters,
+      ...(req.query.casino_id ? { casino_id: req.query.casino_id } : {}),
+      ...(req.query.geo ? { geo: req.query.geo } : {}),
+      ...(req.query.bonus_category ? { bonus_category: req.query.bonus_category } : {}),
+      ...(req.query.bonus_kind ? { bonus_kind: req.query.bonus_kind } : {}),
+      ...(req.query.bonus_type ? { bonus_type: req.query.bonus_type } : {}),
+      ...(req.query.status ? { status: req.query.status } : {}),
+    };
+
+    const conn = await pool.getConnection();
+    const conditions: string[] = [];
+    const queryParams: any[] = [];
+
+    if (normalizedFilters && Object.keys(normalizedFilters).length > 0) {
+      const { clause, params: filterParams } = buildWhereClause(
+        normalizedFilters,
+        ['casino_id', 'geo', 'bonus_category', 'bonus_kind', 'bonus_type', 'status'],
+        'b'
+      );
+      if (clause) {
+        conditions.push(clause.replace('WHERE ', ''));
+        queryParams.push(...filterParams);
+      }
+    }
+
+    if (searchValue) {
+      conditions.push('(b.name LIKE ? OR b.promo_code LIKE ? OR c.name LIKE ?)');
+      const searchPattern = `%${searchValue}%`;
+      queryParams.push(searchPattern, searchPattern, searchPattern);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT b.*, c.name as casino_name
+       FROM casino_bonuses b
+       LEFT JOIN casinos c ON b.casino_id = c.id
+       ${whereClause}
+       ORDER BY b.created_at DESC
+       LIMIT 10000`,
+      queryParams
+    );
+
+    conn.release();
+
+    const bonuses = rows as any[];
+
+    function formatBonusValue(b: any): string {
+      const v = b.bonus_value;
+      if (v == null) return '';
+      const unit = b.bonus_unit;
+      const cur = b.currency || '';
+      if (unit === 'percent') return `${v}%`;
+      if (unit === 'amount' && cur) return `${v} ${cur}`.trim();
+      if (unit === 'amount') return String(v);
+      return cur ? `${v} ${cur}`.trim() : String(v);
+    }
+
+    function formatMaxWin(value: any, unit: string | null, currency: string): string {
+      if (value == null) return '';
+      if (unit === 'coefficient') return `X${value}`;
+      if (unit === 'fixed' && currency) return `${value} ${currency}`.trim();
+      if (unit === 'fixed') return String(value);
+      return currency ? `${value} ${currency}`.trim() || String(value) : String(value);
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Бонусы');
+
+    sheet.columns = [
+      { header: 'ID', key: 'id', width: 8 },
+      { header: 'Казино', key: 'casino_name', width: 25 },
+      { header: 'ID казино', key: 'casino_id', width: 10 },
+      { header: 'GEO', key: 'geo', width: 8 },
+      { header: 'Название бонуса', key: 'name', width: 30 },
+      { header: 'Категория', key: 'bonus_category', width: 12 },
+      { header: 'Вид бонуса', key: 'bonus_kind', width: 14 },
+      { header: 'Тип бонуса', key: 'bonus_type', width: 14 },
+      { header: 'Значение бонуса', key: 'bonus_value_display', width: 18 },
+      { header: 'Валюта', key: 'currency', width: 10 },
+      { header: 'Кол-во фриспинов', key: 'freespins_count', width: 16 },
+      { header: 'Стоимость спина', key: 'freespin_value', width: 16 },
+      { header: 'Игра для фриспинов', key: 'freespin_game', width: 22 },
+      { header: 'Кешбек, %', key: 'cashback_percent', width: 12 },
+      { header: 'Период кешбека', key: 'cashback_period', width: 16 },
+      { header: 'Мин. депозит', key: 'min_deposit', width: 14 },
+      { header: 'Макс. бонус', key: 'max_bonus', width: 14 },
+      { header: 'Макс. кэш-аут', key: 'max_cashout', width: 16 },
+      { header: 'Макс. выигрыш (кэш)', key: 'max_win_cash_display', width: 18 },
+      { header: 'Макс. выигрыш (фриспины)', key: 'max_win_freespin_display', width: 22 },
+      { header: 'Макс. выигрыш (%)', key: 'max_win_percent_display', width: 18 },
+      { header: 'Вейджер', key: 'wagering_requirement', width: 10 },
+      { header: 'Игры для отыгрыша', key: 'wagering_games', width: 22 },
+      { header: 'Промокод', key: 'promo_code', width: 16 },
+      { header: 'Начало действия', key: 'valid_from', width: 18 },
+      { header: 'Окончание действия', key: 'valid_to', width: 18 },
+      { header: 'Заметки', key: 'notes', width: 40 },
+    ];
+
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true };
+
+    for (const b of bonuses) {
+      const cur = b.currency || '';
+      sheet.addRow({
+        id: b.id,
+        casino_name: b.casino_name || '',
+        casino_id: b.casino_id,
+        geo: b.geo,
+        name: b.name,
+        bonus_category: b.bonus_category,
+        bonus_kind: b.bonus_kind,
+        bonus_type: b.bonus_type,
+        bonus_value_display: formatBonusValue(b),
+        currency: b.currency,
+        freespins_count: b.freespins_count,
+        freespin_value: b.freespin_value,
+        freespin_game: b.freespin_game,
+        cashback_percent: b.cashback_percent,
+        cashback_period: b.cashback_period,
+        min_deposit: b.min_deposit,
+        max_bonus: b.max_bonus,
+        max_cashout: b.max_cashout,
+        max_win_cash_display: formatMaxWin(b.max_win_cash_value, b.max_win_cash_unit, cur),
+        max_win_freespin_display: formatMaxWin(b.max_win_freespin_value, b.max_win_freespin_unit, cur),
+        max_win_percent_display: formatMaxWin(b.max_win_percent_value, b.max_win_percent_unit, cur),
+        wagering_requirement: b.wagering_requirement,
+        wagering_games: b.wagering_games,
+        promo_code: b.promo_code,
+        valid_from: b.valid_from,
+        valid_to: b.valid_to,
+        notes: b.notes,
+      });
+    }
+
+    const filename = `bonuses_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (e: any) {
+    console.error('exportBonusesXlsx error:', e?.message || e);
+    res.status(500).json({ error: 'Failed to export bonuses' });
   }
 };
 

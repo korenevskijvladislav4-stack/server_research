@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authenticate } from '../middleware/auth.middleware';
 import {
   getAllPayments,
+  exportPaymentsXlsx,
   listCasinoPayments,
   createCasinoPayment,
   updateCasinoPayment,
@@ -14,6 +15,7 @@ import {
 const router = Router();
 
 router.get('/payments', authenticate, getAllPayments);
+router.get('/payments/export', authenticate, exportPaymentsXlsx);
 router.get('/casinos/:casinoId/payments', authenticate, listCasinoPayments);
 router.post('/casinos/:casinoId/payments', authenticate, createCasinoPayment);
 router.put('/casinos/:casinoId/payments/:id', authenticate, updateCasinoPayment);

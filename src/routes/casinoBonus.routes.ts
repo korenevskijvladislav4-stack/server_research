@@ -6,6 +6,7 @@ const router = Router();
 
 // Global bonuses list with filters
 router.get('/bonuses', authenticate, casinoBonusController.getAllBonuses);
+router.get('/bonuses/export', authenticate, casinoBonusController.exportBonusesXlsx);
 
 router.get('/casinos/:casinoId/bonuses', authenticate, casinoBonusController.listCasinoBonuses);
 router.post('/casinos/:casinoId/bonuses', authenticate, casinoBonusController.createCasinoBonus);
