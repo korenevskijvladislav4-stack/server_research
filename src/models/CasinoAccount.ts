@@ -11,6 +11,8 @@ export interface CasinoAccount {
   last_modified_at: string;
   created_at: string;
   updated_at: string;
+  deposit_count?: number;
+  withdrawal_count?: number;
 }
 
 export interface CreateCasinoAccountDto {

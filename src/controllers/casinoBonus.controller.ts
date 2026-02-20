@@ -217,6 +217,11 @@ export const exportBonusesXlsx = async (req: Request, res: Response): Promise<vo
     const bonuses = rows as any[];
 
     function formatBonusValue(b: any): string {
+      // Кешбек — берём % кешбека как основное значение
+      if (b.bonus_kind === 'cashback' && b.cashback_percent != null) {
+        return `${b.cashback_percent}%`;
+      }
+
       const v = b.bonus_value;
       if (v == null) return '';
       const unit = b.bonus_unit;
@@ -239,29 +244,41 @@ export const exportBonusesXlsx = async (req: Request, res: Response): Promise<vo
     const sheet = workbook.addWorksheet('Бонусы');
 
     sheet.columns = [
+      // Общая идентификация
       { header: 'ID', key: 'id', width: 8 },
       { header: 'Казино', key: 'casino_name', width: 25 },
       { header: 'ID казино', key: 'casino_id', width: 10 },
       { header: 'GEO', key: 'geo', width: 8 },
       { header: 'Название бонуса', key: 'name', width: 30 },
+
+      // Тип бонуса
       { header: 'Категория', key: 'bonus_category', width: 12 },
       { header: 'Вид бонуса', key: 'bonus_kind', width: 14 },
       { header: 'Тип бонуса', key: 'bonus_type', width: 14 },
+
+      // Основные условия/значение
       { header: 'Значение бонуса', key: 'bonus_value_display', width: 18 },
       { header: 'Валюта', key: 'currency', width: 10 },
-      { header: 'Кол-во фриспинов', key: 'freespins_count', width: 16 },
-      { header: 'Стоимость спина', key: 'freespin_value', width: 16 },
-      { header: 'Игра для фриспинов', key: 'freespin_game', width: 22 },
-      { header: 'Кешбек, %', key: 'cashback_percent', width: 12 },
-      { header: 'Период кешбека', key: 'cashback_period', width: 16 },
       { header: 'Мин. депозит', key: 'min_deposit', width: 14 },
       { header: 'Макс. бонус', key: 'max_bonus', width: 14 },
       { header: 'Макс. кэш-аут', key: 'max_cashout', width: 16 },
+      { header: 'Период кешбека', key: 'cashback_period', width: 16 },
+
+      // Макс. выигрыши
       { header: 'Макс. выигрыш (кэш)', key: 'max_win_cash_display', width: 18 },
       { header: 'Макс. выигрыш (фриспины)', key: 'max_win_freespin_display', width: 22 },
       { header: 'Макс. выигрыш (%)', key: 'max_win_percent_display', width: 18 },
-      { header: 'Вейджер', key: 'wagering_requirement', width: 10 },
+
+      // Фриспины и вейджер
+      { header: 'Кол-во фриспинов', key: 'freespins_count', width: 16 },
+      { header: 'Стоимость спина', key: 'freespin_value', width: 16 },
+      { header: 'Игра для фриспинов', key: 'freespin_game', width: 22 },
+      { header: 'Вейджер (кэш)', key: 'wagering_requirement', width: 14 },
+      { header: 'Вейджер (фриспины)', key: 'wagering_freespin', width: 18 },
+      { header: 'Время на отыгрыш', key: 'wagering_time_limit', width: 18 },
       { header: 'Игры для отыгрыша', key: 'wagering_games', width: 22 },
+
+      // Прочее
       { header: 'Промокод', key: 'promo_code', width: 16 },
       { header: 'Начало действия', key: 'valid_from', width: 18 },
       { header: 'Окончание действия', key: 'valid_to', width: 18 },
@@ -287,7 +304,6 @@ export const exportBonusesXlsx = async (req: Request, res: Response): Promise<vo
         freespins_count: b.freespins_count,
         freespin_value: b.freespin_value,
         freespin_game: b.freespin_game,
-        cashback_percent: b.cashback_percent,
         cashback_period: b.cashback_period,
         min_deposit: b.min_deposit,
         max_bonus: b.max_bonus,
@@ -296,6 +312,8 @@ export const exportBonusesXlsx = async (req: Request, res: Response): Promise<vo
         max_win_freespin_display: formatMaxWin(b.max_win_freespin_value, b.max_win_freespin_unit, cur),
         max_win_percent_display: formatMaxWin(b.max_win_percent_value, b.max_win_percent_unit, cur),
         wagering_requirement: b.wagering_requirement,
+        wagering_freespin: b.wagering_freespin,
+        wagering_time_limit: b.wagering_time_limit,
         wagering_games: b.wagering_games,
         promo_code: b.promo_code,
         valid_from: b.valid_from,
@@ -380,7 +398,9 @@ export const createCasinoBonus = async (req: AuthRequest, res: Response): Promis
       max_win_percent_value,
       max_win_percent_unit,
       wagering_requirement,
+      wagering_freespin,
       wagering_games,
+      wagering_time_limit,
       promo_code,
       valid_from,
       valid_to,
@@ -399,8 +419,8 @@ export const createCasinoBonus = async (req: AuthRequest, res: Response): Promis
        (casino_id, geo, name, bonus_category, bonus_kind, bonus_type, bonus_value, bonus_unit, currency, 
         freespins_count, freespin_value, freespin_game, cashback_percent, cashback_period,
         min_deposit, max_bonus, max_cashout, max_win_cash_value, max_win_cash_unit, max_win_freespin_value, max_win_freespin_unit, max_win_percent_value, max_win_percent_unit,
-        wagering_requirement, wagering_games, promo_code, valid_from, valid_to, status, notes, created_by, updated_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        wagering_requirement, wagering_freespin, wagering_games, wagering_time_limit, promo_code, valid_from, valid_to, status, notes, created_by, updated_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         casinoId,
         geo,
@@ -426,7 +446,9 @@ export const createCasinoBonus = async (req: AuthRequest, res: Response): Promis
         max_win_percent_value ?? null,
         max_win_percent_unit ?? null,
         wagering_requirement ?? null,
+        wagering_freespin ?? null,
         wagering_games ?? null,
+        wagering_time_limit ?? null,
         promo_code ?? null,
         valid_from ?? null,
         valid_to ?? null,
@@ -505,7 +527,9 @@ export const updateCasinoBonus = async (req: AuthRequest, res: Response): Promis
       ['max_win_percent_value', toNum(body.max_win_percent_value)],
       ['max_win_percent_unit', toStr(body.max_win_percent_unit)],
       ['wagering_requirement', body.wagering_requirement],
+      ['wagering_freespin', body.wagering_freespin],
       ['wagering_games', body.wagering_games],
+      ['wagering_time_limit', body.wagering_time_limit],
       ['promo_code', body.promo_code],
       ['valid_from', body.valid_from],
       ['valid_to', body.valid_to],

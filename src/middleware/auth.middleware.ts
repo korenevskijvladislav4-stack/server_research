@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import jwt, { TokenExpiredError, JsonWebTokenError } from 'jsonwebtoken';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
@@ -22,7 +22,7 @@ export const authenticate = (
       (req.query.token as string | undefined);
 
     if (!token) {
-      res.status(401).json({ error: 'No token provided' });
+      res.status(401).json({ error: 'Токен не передан', code: 'NO_TOKEN' });
       return;
     }
 
@@ -34,7 +34,15 @@ export const authenticate = (
     };
 
     next();
-  } catch (error) {
-    res.status(401).json({ error: 'Invalid token' });
+  } catch (error: any) {
+    if (error instanceof TokenExpiredError) {
+      res.status(401).json({ error: 'Сессия истекла. Войдите снова.', code: 'TOKEN_EXPIRED' });
+      return;
+    }
+    if (error instanceof JsonWebTokenError) {
+      res.status(401).json({ error: 'Неверный токен авторизации', code: 'INVALID_TOKEN' });
+      return;
+    }
+    res.status(401).json({ error: 'Ошибка авторизации', code: 'AUTH_ERROR' });
   }
 };

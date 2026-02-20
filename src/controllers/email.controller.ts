@@ -10,7 +10,7 @@ import {
 } from '../services/gmail-oauth.service';
 import { Email } from '../models/Email';
 import type { ConnectionType } from '../models/ImapAccount';
-import { summarizeEmailsByIds } from '../services/ai-summary.service';
+import { summarizeEmailsByIds, assignEmailTopicsByIds } from '../services/ai-summary.service';
 import { screenshotEmailsByIds } from '../services/email-screenshot.service';
 
 // ---------------------------------------------------------------------------
@@ -136,13 +136,14 @@ async function buildImapServiceForAccount(row: RowDataPacket): Promise<ImapServi
 // ---------------------------------------------------------------------------
 
 const EMAIL_BASE_SELECT = `
-  e.*, ca.geo AS geo, c.name AS casino_name
+  e.*, ca.geo AS geo, c.name AS casino_name, et.name AS topic_name
 `;
 
 const EMAIL_BASE_FROM = `
   FROM emails e
   LEFT JOIN casinos c ON c.id = e.related_casino_id
   LEFT JOIN casino_accounts ca ON ca.email = e.to_email AND ca.casino_id = e.related_casino_id
+  LEFT JOIN email_topics et ON et.id = e.topic_id
 `;
 
 // ---------------------------------------------------------------------------
@@ -475,10 +476,13 @@ export const syncEmails = async (req: Request, res: Response): Promise<void> => 
         const imapService = new ImapService();
         services.push(imapService);
         const { synced: syncedCount, newIds } = await imapService.syncEmailsToDatabase();
-        // AI-summarize and screenshot only new emails (fire & forget)
+        // AI-summarize, assign topic, and screenshot only new emails (fire & forget)
         if (newIds.length > 0) {
           summarizeEmailsByIds(newIds).catch((e) =>
             console.error('AI summary error (non-fatal):', e),
+          );
+          assignEmailTopicsByIds(newIds).catch((e) =>
+            console.error('AI topic assignment error (non-fatal):', e),
           );
           screenshotEmailsByIds(newIds).catch((e) =>
             console.error('Screenshot error (non-fatal):', e),
@@ -537,10 +541,13 @@ export const syncEmails = async (req: Request, res: Response): Promise<void> => 
       console.error('Auto-link error (non-fatal):', e);
     }
 
-    // AI-summarize and screenshot only newly synced emails (fire & forget)
+    // AI-summarize, assign topic, and screenshot only newly synced emails (fire & forget)
     if (allNewIds.length > 0) {
       summarizeEmailsByIds(allNewIds).catch((e) =>
         console.error('AI summary error (non-fatal):', e),
+      );
+      assignEmailTopicsByIds(allNewIds).catch((e) =>
+        console.error('AI topic assignment error (non-fatal):', e),
       );
       screenshotEmailsByIds(allNewIds).catch((e) =>
         console.error('Screenshot error (non-fatal):', e),
@@ -635,11 +642,12 @@ export const requestSummary = async (req: Request, res: Response): Promise<void>
   try {
     const { id } = req.params;
 
-    // Clear existing summary so it gets regenerated
-    await pool.query('UPDATE emails SET ai_summary = NULL WHERE id = ?', [id]);
+    // Clear existing summary and topic so they get regenerated
+    await pool.query('UPDATE emails SET ai_summary = NULL, topic_id = NULL WHERE id = ?', [id]);
 
-    const { summarizeEmail } = await import('../services/ai-summary.service');
+    const { summarizeEmail, assignEmailTopic } = await import('../services/ai-summary.service');
     const summary = await summarizeEmail(Number(id));
+    await assignEmailTopic(Number(id));
 
     if (!summary) {
       res.status(500).json({ error: 'Не удалось получить саммари' });

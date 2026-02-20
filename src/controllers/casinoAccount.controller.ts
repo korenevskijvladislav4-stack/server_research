@@ -79,10 +79,19 @@ export const getAllCasinoAccounts = async (req: AuthRequest, res: Response): Pro
     const total = Number((countRows[0] as any)?.total ?? 0);
 
     const [rows] = await connection.query<RowDataPacket[]>(
-      `SELECT ca.*, c.name as casino_name, u.username as owner_username
+      `SELECT ca.*, c.name as casino_name, u.username as owner_username,
+         COALESCE(totals.deposit_count, 0) AS deposit_count,
+         COALESCE(totals.withdrawal_count, 0) AS withdrawal_count
        FROM casino_accounts ca
        LEFT JOIN casinos c ON ca.casino_id = c.id
        LEFT JOIN users u ON ca.owner_id = u.id
+       LEFT JOIN (
+         SELECT account_id,
+                COUNT(CASE WHEN type = 'deposit' THEN 1 END) AS deposit_count,
+                COUNT(CASE WHEN type = 'withdrawal' THEN 1 END) AS withdrawal_count
+         FROM account_transactions
+         GROUP BY account_id
+       ) totals ON totals.account_id = ca.id
        ${whereClause}
        ORDER BY ${sortField} ${sortOrder}, ca.created_at DESC
        ${limitClause}`,
@@ -111,9 +120,18 @@ export const getCasinoAccounts = async (req: AuthRequest, res: Response): Promis
     const connection = await pool.getConnection();
 
     const [rows] = await connection.query<RowDataPacket[]>(
-      `SELECT ca.*, u.username as owner_username
+      `SELECT ca.*, u.username as owner_username,
+         COALESCE(totals.deposit_count, 0) AS deposit_count,
+         COALESCE(totals.withdrawal_count, 0) AS withdrawal_count
        FROM casino_accounts ca
        LEFT JOIN users u ON ca.owner_id = u.id
+       LEFT JOIN (
+         SELECT account_id,
+                COUNT(CASE WHEN type = 'deposit' THEN 1 END) AS deposit_count,
+                COUNT(CASE WHEN type = 'withdrawal' THEN 1 END) AS withdrawal_count
+         FROM account_transactions
+         GROUP BY account_id
+       ) totals ON totals.account_id = ca.id
        WHERE ca.casino_id = ?
        ORDER BY ca.created_at DESC`,
       [casinoId]

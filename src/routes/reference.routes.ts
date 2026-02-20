@@ -16,4 +16,12 @@ router.post('/ref/payment-types', authenticate, refController.createPaymentType)
 router.get('/ref/payment-methods', authenticate, refController.getPaymentMethods);
 router.post('/ref/payment-methods', authenticate, refController.createPaymentMethod);
 
+// Promo types (tournament type)
+router.get('/ref/promo-types', authenticate, refController.getPromoTypes);
+router.post('/ref/promo-types', authenticate, refController.createPromoType);
+
+// Providers (game/slot providers)
+router.get('/ref/providers', authenticate, refController.getProviders);
+router.post('/ref/providers', authenticate, refController.createProvider);
+
 export default router;

@@ -213,6 +213,30 @@ const createTables = async () => {
       console.error('Error adding screenshot_url column:', err?.message || err);
     }
 
+    // Email topics (themes) — configurable list for AI classification
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS email_topics (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        sort_order INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    try {
+      const [topicIdCol] = await connection.query<any[]>(`
+        SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'emails' AND COLUMN_NAME = 'topic_id'
+      `);
+      if (Array.isArray(topicIdCol) && (topicIdCol[0] as any).cnt === 0) {
+        await connection.query(`ALTER TABLE emails ADD COLUMN topic_id INT NULL`);
+      }
+    } catch (err: any) {
+      console.error('Error adding topic_id to emails:', err?.message || err);
+    }
+
     // Email attachments table
     await connection.query(`
       CREATE TABLE IF NOT EXISTS email_attachments (
@@ -477,6 +501,23 @@ const createTables = async () => {
       }
     }
 
+    // Wagering: отдельно на кэш и на фриспины + время на отыгрыш
+    const wageringBonusColumns = [
+      { name: 'wagering_freespin', def: 'DECIMAL(10,2) NULL AFTER wagering_requirement' },
+      { name: 'wagering_time_limit', def: 'VARCHAR(100) NULL AFTER wagering_games' },
+    ];
+    for (const col of wageringBonusColumns) {
+      const [colRows] = await connection.query<any[]>(`
+        SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'casino_bonuses' AND COLUMN_NAME = ?
+      `, [col.name]);
+      const colExists = Array.isArray(colRows) && colRows[0]?.cnt > 0;
+      if (!colExists) {
+        await connection.query(`ALTER TABLE casino_bonuses ADD COLUMN ${col.name} ${col.def}`);
+        console.log(`Added column ${col.name} to casino_bonuses`);
+      }
+    }
+
     // Casino payment methods per geo
     await connection.query(`
       CREATE TABLE IF NOT EXISTS casino_payments (
@@ -613,6 +654,22 @@ const createTables = async () => {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    // Images attached to casino promos
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS casino_promo_images (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        casino_id INT NOT NULL,
+        promo_id INT NOT NULL,
+        file_path VARCHAR(500) NOT NULL,
+        original_name VARCHAR(255) NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (casino_id) REFERENCES casinos(id) ON DELETE CASCADE,
+        FOREIGN KEY (promo_id) REFERENCES casino_promos(id) ON DELETE CASCADE,
+        INDEX idx_casino_id (casino_id),
+        INDEX idx_promo_id (promo_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
     // Reference tables for bonus names, payment types, payment methods
     await connection.query(`
       CREATE TABLE IF NOT EXISTS ref_bonus_names (
@@ -635,6 +692,36 @@ const createTables = async () => {
         id INT AUTO_INCREMENT PRIMARY KEY,
         name VARCHAR(255) UNIQUE NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS ref_promo_types (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) UNIQUE NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS providers (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(255) UNIQUE NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS casino_providers (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        casino_id INT NOT NULL,
+        provider_id INT NOT NULL,
+        geo VARCHAR(32) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_casino_provider_geo (casino_id, provider_id, geo),
+        FOREIGN KEY (casino_id) REFERENCES casinos(id) ON DELETE CASCADE,
+        FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE,
+        INDEX idx_casino_geo (casino_id, geo)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
@@ -730,6 +817,26 @@ const createTables = async () => {
         INDEX idx_casino_id (casino_id),
         INDEX idx_geo (geo),
         INDEX idx_owner_id (owner_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Account transactions (deposit/withdrawal) per account
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS account_transactions (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        account_id INT NOT NULL,
+        type ENUM('deposit','withdrawal') NOT NULL,
+        amount DECIMAL(14,2) NOT NULL,
+        currency VARCHAR(10) NULL,
+        transaction_date DATE NOT NULL,
+        notes TEXT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_by INT NULL,
+        FOREIGN KEY (account_id) REFERENCES casino_accounts(id) ON DELETE CASCADE,
+        FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+        INDEX idx_account_id (account_id),
+        INDEX idx_transaction_date (transaction_date),
+        INDEX idx_type (type)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
@@ -873,6 +980,49 @@ const createTables = async () => {
         FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+
+    // Casino promos (tournaments & promotions)
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS casino_promos (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        casino_id INT NOT NULL,
+        geo VARCHAR(10) NOT NULL,
+        promo_category ENUM('tournament','promotion') NOT NULL DEFAULT 'tournament',
+        name VARCHAR(255) NOT NULL,
+        promo_type VARCHAR(100) NULL,
+        period_start DATE NULL,
+        period_end DATE NULL,
+        provider VARCHAR(255) NULL,
+        prize_fund VARCHAR(100) NULL,
+        mechanics TEXT NULL,
+        min_bet VARCHAR(100) NULL,
+        wagering_prize VARCHAR(100) NULL,
+        status ENUM('active','paused','expired','draft') DEFAULT 'active',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        created_by INT NULL,
+        updated_by INT NULL,
+        FOREIGN KEY (casino_id) REFERENCES casinos(id) ON DELETE CASCADE,
+        FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+        FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
+        INDEX idx_promo_casino_geo (casino_id, geo),
+        INDEX idx_promo_status (status),
+        INDEX idx_promo_category (promo_category)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Drop removed columns from casino_promos if they exist (migration for existing DBs)
+    for (const col of ['promo_kind', 'participation_button', 'notes']) {
+      const [rows] = await connection.query<any[]>(
+        `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'casino_promos' AND COLUMN_NAME = ?`,
+        [col]
+      );
+      if (Array.isArray(rows) && rows[0]?.cnt > 0) {
+        await connection.query(`ALTER TABLE casino_promos DROP COLUMN \`${col}\``);
+        console.log(`Dropped column casino_promos.${col}`);
+      }
+    }
 
     console.log('Database tables created successfully');
     connection.release();

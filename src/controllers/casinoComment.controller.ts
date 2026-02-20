@@ -276,6 +276,16 @@ export const getCasinoImages = async (req: Request, res: Response): Promise<void
       [casinoId]
     );
 
+    // Get promo images
+    const [promoRows] = await connection.query<RowDataPacket[]>(
+      `SELECT i.*, p.name as promo_name, 'promo' as entity_type
+       FROM casino_promo_images i
+       LEFT JOIN casino_promos p ON i.promo_id = p.id
+       WHERE i.casino_id = ?
+       ORDER BY i.created_at DESC`,
+      [casinoId]
+    );
+
     connection.release();
 
     const allImagesRaw = [
@@ -298,6 +308,13 @@ export const getCasinoImages = async (req: Request, res: Response): Promise<void
           ...img,
           url: `/api/uploads/${img.file_path}`,
           label: img.payment_name ? `Платеж: ${img.payment_name}` : 'Платеж',
+        })
+      ),
+      ...(promoRows as unknown as (CasinoCommentImage & { promo_name?: string; entity_type: string })[]).map(
+        (img) => ({
+          ...img,
+          url: `/api/uploads/${img.file_path}`,
+          label: img.promo_name ? `Промо: ${img.promo_name}` : 'Промо',
         })
       ),
     ];

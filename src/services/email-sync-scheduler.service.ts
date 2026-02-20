@@ -7,7 +7,7 @@ import {
   buildXOAuth2Token,
 } from './gmail-oauth.service';
 import { autoLinkEmailsToCasinos } from '../controllers/email.controller';
-import { summarizeEmailsByIds } from './ai-summary.service';
+import { summarizeEmailsByIds, assignEmailTopicsByIds } from './ai-summary.service';
 import { screenshotEmailsByIds } from './email-screenshot.service';
 import type { ConnectionType } from '../models/ImapAccount';
 
@@ -122,12 +122,17 @@ async function runSync(): Promise<void> {
       console.error('[EmailScheduler] Auto-link error:', e);
     }
 
-    // AI-summarize and screenshot only the newly synced emails
+    // AI-summarize, assign topic, and screenshot only the newly synced emails
     if (allNewIds.length > 0) {
       try {
         await summarizeEmailsByIds(allNewIds);
       } catch (e) {
         console.error('[EmailScheduler] AI summary error:', e);
+      }
+      try {
+        await assignEmailTopicsByIds(allNewIds);
+      } catch (e) {
+        console.error('[EmailScheduler] AI topic assignment error:', e);
       }
       try {
         await screenshotEmailsByIds(allNewIds);

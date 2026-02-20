@@ -48,12 +48,14 @@ export const register = async (req: Request, res: Response): Promise<void> => {
 
 export const login = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email, password } = req.body;
+    const rawEmail = req.body?.email;
+    const password = req.body?.password;
+    const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
 
-    console.log('Login attempt for email:', email);
+    console.log('Login attempt for email:', email || '(empty)');
 
     if (!email || !password) {
-      res.status(400).json({ error: 'Email and password are required' });
+      res.status(400).json({ error: 'Укажите email и пароль' });
       return;
     }
 
@@ -82,24 +84,24 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
     try {
       const [users] = await connection.query<RowDataPacket[]>(
-        'SELECT * FROM users WHERE email = ?',
+        'SELECT * FROM users WHERE LOWER(TRIM(email)) = ?',
         [email]
       );
 
       if (Array.isArray(users) && users.length === 0) {
         connection.release();
-        console.log('User not found:', email);
-        res.status(401).json({ error: 'Invalid credentials' });
+        console.log('Login 401: user not found for email:', email);
+        res.status(401).json({ error: 'Неверный email или пароль' });
         return;
       }
 
       const user = users[0] as any;
-      console.log('User found:', { id: user.id, email: user.email, hasPassword: !!user.password });
+      const userPassword = user.password ?? user.PASSWORD;
+      console.log('User found:', { id: user.id, email: user.email, hasPassword: !!userPassword });
 
-      // Проверка наличия поля password
-      if (!user.password) {
+      if (!userPassword) {
         connection.release();
-        console.error('User password field is missing');
+        console.error('User password field is missing in DB');
         res.status(500).json({ 
           error: 'User data error',
           message: 'Password field is missing in user record'
@@ -107,16 +109,24 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         return;
       }
 
-      const isValidPassword = await bcrypt.compare(password, user.password);
-
-      if (!isValidPassword) {
+      if (user.is_active === false || user.is_active === 0) {
         connection.release();
-        console.log('Invalid password for user:', email);
-        res.status(401).json({ error: 'Invalid credentials' });
+        console.log('Login 401: account disabled for email:', email);
+        res.status(401).json({ error: 'Аккаунт деактивирован' });
         return;
       }
 
-      const expiresIn = (process.env.JWT_EXPIRES_IN ?? '7d') as any;
+      const hash = typeof userPassword === 'string' ? userPassword : (userPassword?.toString?.() ?? String(userPassword));
+      const isValidPassword = await bcrypt.compare(String(password), hash);
+
+      if (!isValidPassword) {
+        connection.release();
+        console.log('Login 401: invalid password for email:', email);
+        res.status(401).json({ error: 'Неверный email или пароль' });
+        return;
+      }
+
+      const expiresIn = (process.env.JWT_EXPIRES_IN ?? '30d') as any;
       
       try {
         const token = jwt.sign(
