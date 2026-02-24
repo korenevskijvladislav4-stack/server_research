@@ -2,6 +2,18 @@ import prisma from '../../lib/prisma';
 import { Prisma } from '@prisma/client';
 import { extractProviderNamesFromText } from '../../services/ai-summary.service';
 
+function buildProviderKey(name: string): string {
+  const lower = name.toLowerCase();
+  // Убираем слова, которые часто добавляются/опускаются
+  const withoutWords = lower
+    .replace(/\bgaming\b/g, '')
+    .replace(/\bgames\b/g, '')
+    .replace(/\bstudio\b/g, '')
+    .replace(/\bstudios\b/g, '');
+  // Убираем все не-буквенно-цифровые символы (пробелы, дефисы и т.п.)
+  return withoutWords.replace(/[^a-z0-9а-яё]/g, '');
+}
+
 export interface CasinoProviderWithName {
   id: number;
   casino_id: number;
@@ -257,14 +269,26 @@ export const casinoProviderService = {
 
     let added = 0;
 
+    // Карта канонических имён по "ключу" (упрощённое написание)
+    const canonicalByKey = new Map<string, string>();
+    for (const n of currentNames) {
+      const key = buildProviderKey(n);
+      if (key && !canonicalByKey.has(key)) {
+        canonicalByKey.set(key, n);
+      }
+    }
+
     for (const rawName of names) {
       const nameTrim = rawName.trim();
       if (!nameTrim) continue;
 
+      const rawKey = buildProviderKey(nameTrim);
+      const canonicalName = rawKey && canonicalByKey.get(rawKey) ? canonicalByKey.get(rawKey)! : nameTrim;
+
       let providerId: number;
 
       const existing = await prisma.providers.findUnique({
-        where: { name: nameTrim },
+        where: { name: canonicalName },
         select: { id: true },
       });
 
@@ -272,9 +296,14 @@ export const casinoProviderService = {
         providerId = existing.id;
       } else {
         const created = await prisma.providers.create({
-          data: { name: nameTrim },
+          data: { name: canonicalName },
         });
         providerId = created.id;
+        // Добавляем новый канон в карту, чтобы последующие имена с тем же ключом
+        // использовали его, а не создавали ещё один провайдер
+        if (rawKey && !canonicalByKey.has(rawKey)) {
+          canonicalByKey.set(rawKey, canonicalName);
+        }
       }
 
       const existingConnection = await prisma.casino_providers.findUnique({
