@@ -17,7 +17,7 @@ export type FilterOperator = 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'like' 
 export interface FilterCondition {
   field: string;
   operator: FilterOperator;
-  value: any;
+  value: unknown;
 }
 
 // Paginated response
@@ -34,7 +34,7 @@ export interface PaginatedResponse<T> {
 // Query parameters from request
 export interface QueryParams extends PaginationParams {
   search?: string;
-  filters?: Record<string, any>;
+  filters?: Record<string, unknown>;
 }
 
 // Default values

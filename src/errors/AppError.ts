@@ -1,0 +1,15 @@
+export class AppError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    message: string,
+    public readonly code?: string
+  ) {
+    super(message);
+    this.name = 'AppError';
+    Object.setPrototypeOf(this, AppError.prototype);
+  }
+}
+
+export function isAppError(err: unknown): err is AppError {
+  return err instanceof AppError;
+}

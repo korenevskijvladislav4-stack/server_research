@@ -1,175 +1,78 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { RowDataPacket } from 'mysql2';
-import pool from '../database/connection';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+import { withConnection } from '../database/withConnection';
+import { findUserByEmailOrUsername, findUserByEmail, createUser } from '../repositories/user.repository';
+import { getConfig } from '../config/env';
+import { sendError } from '../common/response';
+import { AppError } from '../errors/AppError';
 
 export const register = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { username, email, password } = req.body;
+  const { username, email, password } = req.body as { username: string; email: string; password: string };
 
-    if (!username || !email || !password) {
-      res.status(400).json({ error: 'All fields are required' });
-      return;
-    }
-
-    const connection = await pool.getConnection();
-    
-    // Check if user exists
-    const [existing] = await connection.query(
-      'SELECT id FROM users WHERE email = ? OR username = ?',
-      [email, username]
-    );
-
-    if (Array.isArray(existing) && existing.length > 0) {
-      connection.release();
-      res.status(400).json({ error: 'User already exists' });
-      return;
-    }
-
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Create user
-    await connection.query(
-      'INSERT INTO users (username, email, password) VALUES (?, ?, ?)',
-      [username, email, hashedPassword]
-    );
-
-    connection.release();
-    res.status(201).json({ message: 'User created successfully' });
-  } catch (error) {
-    console.error('Error registering user:', error);
-    res.status(500).json({ error: 'Failed to register user' });
+  const existing = await withConnection((conn) =>
+    findUserByEmailOrUsername(conn, email, username)
+  );
+  if (existing) {
+    sendError(res, 400, 'User already exists');
+    return;
   }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+  await withConnection((conn) =>
+    createUser(conn, username, email, hashedPassword)
+  );
+
+  res.status(201).json({ message: 'User created successfully' });
 };
 
 export const login = async (req: Request, res: Response): Promise<void> => {
+  const { email, password } = req.body as { email: string; password: string };
+  const config = getConfig();
+
+  const user = await withConnection((conn) => findUserByEmail(conn, email));
+  if (!user) {
+    sendError(res, 401, 'Неверный email или пароль');
+    return;
+  }
+
+  const rawPassword = user.password;
+  if (!rawPassword) {
+    throw new AppError(500, 'User data error', 'MISSING_PASSWORD');
+  }
+
+  if (user.is_active === false || user.is_active === 0) {
+    sendError(res, 401, 'Аккаунт деактивирован');
+    return;
+  }
+
+  const hash = typeof rawPassword === 'string' ? rawPassword : String(rawPassword);
+  const isValidPassword = await bcrypt.compare(String(password), hash);
+  if (!isValidPassword) {
+    sendError(res, 401, 'Неверный email или пароль');
+    return;
+  }
+
   try {
-    const rawEmail = req.body?.email;
-    const password = req.body?.password;
-    const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
-
-    console.log('Login attempt for email:', email || '(empty)');
-
-    if (!email || !password) {
-      res.status(400).json({ error: 'Укажите email и пароль' });
-      return;
-    }
-
-    // Проверка JWT_SECRET
-    if (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'your-secret-key') {
-      console.error('JWT_SECRET is not set or using default value');
-      res.status(500).json({ 
-        error: 'Server configuration error',
-        message: 'JWT_SECRET is not properly configured'
-      });
-      return;
-    }
-
-    let connection;
-    try {
-      connection = await pool.getConnection();
-      console.log('Database connection acquired');
-    } catch (dbError: any) {
-      console.error('Database connection error:', dbError);
-      res.status(500).json({ 
-        error: 'Database connection failed',
-        message: dbError.message || 'Unable to connect to database'
-      });
-      return;
-    }
-
-    try {
-      const [users] = await connection.query<RowDataPacket[]>(
-        'SELECT * FROM users WHERE LOWER(TRIM(email)) = ?',
-        [email]
-      );
-
-      if (Array.isArray(users) && users.length === 0) {
-        connection.release();
-        console.log('Login 401: user not found for email:', email);
-        res.status(401).json({ error: 'Неверный email или пароль' });
-        return;
-      }
-
-      const user = users[0] as any;
-      const userPassword = user.password ?? user.PASSWORD;
-      console.log('User found:', { id: user.id, email: user.email, hasPassword: !!userPassword });
-
-      if (!userPassword) {
-        connection.release();
-        console.error('User password field is missing in DB');
-        res.status(500).json({ 
-          error: 'User data error',
-          message: 'Password field is missing in user record'
-        });
-        return;
-      }
-
-      if (user.is_active === false || user.is_active === 0) {
-        connection.release();
-        console.log('Login 401: account disabled for email:', email);
-        res.status(401).json({ error: 'Аккаунт деактивирован' });
-        return;
-      }
-
-      const hash = typeof userPassword === 'string' ? userPassword : (userPassword?.toString?.() ?? String(userPassword));
-      const isValidPassword = await bcrypt.compare(String(password), hash);
-
-      if (!isValidPassword) {
-        connection.release();
-        console.log('Login 401: invalid password for email:', email);
-        res.status(401).json({ error: 'Неверный email или пароль' });
-        return;
-      }
-
-      const expiresIn = (process.env.JWT_EXPIRES_IN ?? '30d') as any;
-      
-      try {
-        const token = jwt.sign(
-          { id: user.id, email: user.email, role: user.role || 'user' },
-          JWT_SECRET,
-          { expiresIn }
-        );
-
-        connection.release();
-        console.log('Login successful for user:', email);
-
-        res.json({
-          token,
-          user: {
-            id: user.id,
-            username: user.username,
-            email: user.email,
-            role: user.role || 'user'
-          }
-        });
-      } catch (jwtError: any) {
-        connection.release();
-        console.error('JWT signing error:', jwtError);
-        res.status(500).json({ 
-          error: 'Token generation failed',
-          message: jwtError.message || 'Unable to generate authentication token'
-        });
-      }
-    } catch (queryError: any) {
-      connection.release();
-      console.error('Database query error:', queryError);
-      res.status(500).json({ 
-        error: 'Database query failed',
-        message: queryError.message || 'Unable to query user data'
-      });
-    }
-  } catch (error: any) {
-    console.error('Unexpected error in login:', error);
-    console.error('Error stack:', error.stack);
-    res.status(500).json({ 
-      error: 'Internal Server Error',
-      message: error.message || 'Something went wrong',
-      ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+    const token = jwt.sign(
+      { id: user.id, email: user.email, role: user.role || 'user' },
+      config.jwt.secret,
+      { expiresIn: config.jwt.expiresIn } as jwt.SignOptions
+    );
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role || 'user',
+      },
     });
+  } catch (err) {
+    throw new AppError(
+      500,
+      err instanceof Error ? err.message : 'Token generation failed',
+      'JWT_ERROR'
+    );
   }
 };

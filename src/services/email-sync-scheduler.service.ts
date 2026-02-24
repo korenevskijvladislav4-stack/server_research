@@ -6,7 +6,7 @@ import {
   refreshAccessToken,
   buildXOAuth2Token,
 } from './gmail-oauth.service';
-import { autoLinkEmailsToCasinos } from '../controllers/email.controller';
+import { emailService } from '../modules/email/email.service';
 import { summarizeEmailsByIds, assignEmailTopicsByIds } from './ai-summary.service';
 import { screenshotEmailsByIds } from './email-screenshot.service';
 import type { ConnectionType } from '../models/ImapAccount';
@@ -117,7 +117,7 @@ async function runSync(): Promise<void> {
 
     // Auto-link new emails to casinos
     try {
-      await autoLinkEmailsToCasinos();
+      await emailService.autoLinkEmailsToCasinos(false);
     } catch (e) {
       console.error('[EmailScheduler] Auto-link error:', e);
     }

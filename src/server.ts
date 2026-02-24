@@ -4,6 +4,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
+import { loadConfig, getConfig } from './config/env';
 import { connectDatabase } from './database/connection';
 import { errorHandler } from './middleware/errorHandler';
 import casinoRoutes from './routes/casino.routes';
@@ -26,22 +27,28 @@ import casinoHistoryRoutes from './routes/casinoHistory.routes';
 import casinoPromoRoutes from './routes/casinoPromo.routes';
 import casinoProviderRoutes from './routes/casinoProvider.routes';
 import { startEmailSyncScheduler } from './services/email-sync-scheduler.service';
+import { healthCheck } from './controllers/health.controller';
+import { asyncHandler } from './middleware/asyncHandler';
+import swaggerUi from 'swagger-ui-express';
+import { getSwaggerSpec } from './config/swagger';
+import prisma from './lib/prisma';
 
 dotenv.config();
+loadConfig();
 
 const app = express();
-const PORT = process.env.PORT || 5000;
 
 // CORS configuration - разрешаем запросы с клиентского домена
 // Должно быть ДО helmet, чтобы CORS заголовки не блокировались
-// В production можно задать отдельно CORS_ORIGIN_PROD (иначе используется CORS_ORIGIN)
-const corsOriginRaw =
-  process.env.NODE_ENV === 'production' && process.env.CORS_ORIGIN_PROD
-    ? process.env.CORS_ORIGIN_PROD
-    : process.env.CORS_ORIGIN;
-const allowedOrigins = corsOriginRaw
-  ? corsOriginRaw.split(',').map((origin) => origin.trim())
-  : ['http://localhost:3000'];
+function getAllowedOrigins(): string[] {
+  const config = getConfig();
+  const raw =
+    config.nodeEnv === 'production' && config.cors.originProd
+      ? config.cors.originProd
+      : config.cors.origin;
+  return raw ? raw.split(',').map((o) => o.trim()) : ['http://localhost:3000'];
+}
+const allowedOrigins = getAllowedOrigins();
 
 console.log('Allowed CORS origins:', allowedOrigins);
 
@@ -145,10 +152,12 @@ app.use('/api', casinoHistoryRoutes);
 app.use('/api', casinoPromoRoutes);
 app.use('/api', casinoProviderRoutes);
 
-// Health check
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', message: 'Server is running' });
-});
+// Health check (with DB probe; 503 if DB unavailable)
+app.get('/api/health', asyncHandler(healthCheck));
+
+// OpenAPI docs (optional: restrict to dev with getConfig().nodeEnv === 'development')
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(getSwaggerSpec(), { customSiteTitle: 'Research CRM API' }));
+app.get('/api-docs.json', (_req, res) => res.json(getSwaggerSpec()));
 
 // Serve React app in production (after all API routes)
 if (process.env.NODE_ENV === 'production') {
@@ -169,8 +178,10 @@ app.use(errorHandler);
 const startServer = async () => {
   try {
     await connectDatabase();
-    app.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT}`);
+    await prisma.$connect();
+    const config = getConfig();
+    app.listen(config.port, () => {
+      console.log(`Server is running on port ${config.port}`);
 
       // Start background email sync (polls every 2 minutes)
       startEmailSyncScheduler();

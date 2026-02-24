@@ -1,14 +1,15 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt, { TokenExpiredError, JsonWebTokenError } from 'jsonwebtoken';
+import { getConfig } from '../config/env';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+export interface JwtPayload {
+  id: number;
+  email: string;
+  role: string;
+}
 
 export interface AuthRequest extends Request {
-  user?: {
-    id: number;
-    email: string;
-    role: string;
-  };
+  user?: JwtPayload;
 }
 
 export const authenticate = (
@@ -26,15 +27,16 @@ export const authenticate = (
       return;
     }
 
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    const { jwt: jwtConfig } = getConfig();
+    const decoded = jwt.verify(token, jwtConfig.secret) as JwtPayload;
     req.user = {
       id: decoded.id,
       email: decoded.email,
-      role: decoded.role
+      role: decoded.role,
     };
 
     next();
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof TokenExpiredError) {
       res.status(401).json({ error: 'Сессия истекла. Войдите снова.', code: 'TOKEN_EXPIRED' });
       return;

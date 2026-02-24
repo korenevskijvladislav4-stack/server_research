@@ -34,7 +34,7 @@ export function parseQueryParams(query: Request['query']): QueryParams {
   const search = query.search as string | undefined;
   
   // Parse filters from query (format: filter_fieldName=value)
-  const filters: Record<string, any> = {};
+  const filters: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(query)) {
     if (key.startsWith('filter_') && value !== undefined && value !== '') {
       const fieldName = key.replace('filter_', '');
@@ -49,12 +49,12 @@ export function parseQueryParams(query: Request['query']): QueryParams {
  * Build WHERE clause from filters
  */
 export function buildWhereClause(
-  filters: Record<string, any>,
+  filters: Record<string, unknown>,
   allowedFields: string[],
   tableAlias?: string
-): { clause: string; params: any[] } {
+): { clause: string; params: unknown[] } {
   const conditions: string[] = [];
-  const params: any[] = [];
+  const params: unknown[] = [];
   const prefix = tableAlias ? `${tableAlias}.` : '';
 
   for (const [field, value] of Object.entries(filters)) {
@@ -94,7 +94,7 @@ export function buildSearchClause(
   search: string | undefined,
   searchFields: string[],
   tableAlias?: string
-): { clause: string; params: any[] } {
+): { clause: string; params: string[] } {
   if (!search || searchFields.length === 0) {
     return { clause: '', params: [] };
   }
