@@ -266,34 +266,92 @@ export async function extractProviderNamesFromText(
   existingCanonicalNames: string[] = [],
 ): Promise<string[]> {
   const openai = getClient();
-  if (!openai) return [];
-
   const text = rawText.trim().slice(0, 100000); // limit input size, но стараемся не терять хвост списков
   if (!text) return [];
 
-  try {
-    // Шаг 1: извлечь сырые названия из текста
-    const response = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'openai/gpt-4o-mini',
-      messages: [
-        { role: 'system', content: EXTRACT_PROVIDERS_SYSTEM },
-        { role: 'user', content: `Извлеки из следующего текста все названия игровых провайдеров и верни только JSON-массив строк.\n\n${text}` },
-      ],
-      max_tokens: 2000,
-      temperature: 0.2,
+  // 1) Детектор "чистого списка" — без AI вообще, чтобы не терять элементы
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  const isPureList =
+    lines.length >= 5 &&
+    lines.length <= 1000 &&
+    lines.every((l) => {
+      // без HTML/JSON шумов, длина разумная, не похоже на сплошной текст
+      if (l.length > 80) return false;
+      if (/[{}<>]/.test(l)) return false;
+      if (/https?:\/\//i.test(l)) return false;
+      // допускаем пробелы, но не хотим совсем длинных описаний
+      return true;
     });
 
-    const content1 = response.choices[0]?.message?.content?.trim() || '';
-    const extracted = parseProviderNamesFromResponse(content1);
-    if (extracted.length === 0) return [];
-
-    // Шаг 2: если есть канонический список — нормализовать к нему (использовать наше название, если провайдер тот же)
+  if (isPureList) {
+    const unique = Array.from(new Set(lines));
     if (existingCanonicalNames.length === 0) {
-      return extracted;
+      return unique;
+    }
+    // Если есть канон — нормализуем к нему без потери элементов
+    const lowerCanonical = existingCanonicalNames.map((n) => n.toLowerCase());
+    return unique.map((name) => {
+      const idx = lowerCanonical.indexOf(name.toLowerCase());
+      return idx >= 0 ? existingCanonicalNames[idx] : name;
+    });
+  }
+
+  if (!openai) return [];
+
+  try {
+    // 2) Для сложного текста — режем на чанки, чтобы не терять хвост
+    const maxChunkLength = 4000;
+    const chunks: string[] = [];
+    let remaining = text;
+    while (remaining.length > maxChunkLength && chunks.length < 5) {
+      const cutAt = remaining.lastIndexOf('\n', maxChunkLength);
+      const idx = cutAt > 1000 ? cutAt : maxChunkLength;
+      chunks.push(remaining.slice(0, idx));
+      remaining = remaining.slice(idx);
+    }
+    if (remaining.trim().length > 0) {
+      chunks.push(remaining);
     }
 
+    const allExtracted = new Set<string>();
+
+    for (const chunk of chunks) {
+      const response = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'openai/gpt-4o-mini',
+        messages: [
+          { role: 'system', content: EXTRACT_PROVIDERS_SYSTEM },
+          {
+            role: 'user',
+            content:
+              'Извлеки из следующего текста ВСЕ названия игровых провайдеров и верни только JSON-массив строк. Не пропускай хвост текста.\n\n' +
+              chunk,
+          },
+        ],
+        max_tokens: 2000,
+        temperature: 0.1,
+      });
+
+      const content1 = response.choices[0]?.message?.content?.trim() || '';
+      const extracted = parseProviderNamesFromResponse(content1);
+      for (const name of extracted) {
+        allExtracted.add(name);
+      }
+    }
+
+    const extractedUnion = Array.from(allExtracted);
+    if (extractedUnion.length === 0) return [];
+
+    if (existingCanonicalNames.length === 0) {
+      return extractedUnion;
+    }
+
+    // 3) Нормализация к каноническим без потери элементов
     const canonicalList = existingCanonicalNames.slice(0, 500).join('\n');
-    const extractedList = extracted.join('\n');
+    const extractedList = extractedUnion.join('\n');
     const response2 = await openai.chat.completions.create({
       model: process.env.OPENAI_MODEL || 'openai/gpt-4o-mini',
       messages: [

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { casinoProviderService } from './casinoProvider.service';
+import ExcelJS from 'exceljs';
 import { sendError } from '../../common/response';
 
 export async function listCasinoProviders(req: Request, res: Response): Promise<void> {
@@ -139,6 +140,81 @@ export async function getProviderAnalytics(req: Request, res: Response): Promise
   } catch (e: any) {
     console.error('getProviderAnalytics error:', e?.message || e);
     sendError(res, 500, 'Failed to fetch provider analytics');
+  }
+}
+
+export async function exportProviderAnalyticsXlsx(req: Request, res: Response): Promise<void> {
+  try {
+    const geoRaw = req.query.geo;
+    const casinoIdRaw = req.query.casino_id;
+    const providerIdRaw = req.query.provider_id;
+
+    const geoArr = Array.isArray(geoRaw) ? geoRaw : geoRaw != null ? [geoRaw] : [];
+    const geos = geoArr
+      .filter((g): g is string => typeof g === 'string')
+      .map((g) => g.trim())
+      .filter(Boolean);
+
+    const casinoIdArr = Array.isArray(casinoIdRaw) ? casinoIdRaw : casinoIdRaw != null ? [casinoIdRaw] : [];
+    const casinoIds = casinoIdArr
+      .map((id) => Number(id))
+      .filter((id) => !Number.isNaN(id) && id > 0);
+
+    const providerIdArr = Array.isArray(providerIdRaw) ? providerIdRaw : providerIdRaw != null ? [providerIdRaw] : [];
+    const providerIds = providerIdArr
+      .map((id) => Number(id))
+      .filter((id) => !Number.isNaN(id) && id > 0);
+
+    const result = await casinoProviderService.getProviderAnalytics({
+      geos,
+      casino_ids: casinoIds,
+      provider_ids: providerIds,
+    });
+
+    const { casinos, providers, connections } = result;
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Провайдеры');
+
+    // Заголовки: казино + по одному столбцу на провайдера
+    const header = ['Казино', ...providers.map((p) => p.name)];
+    sheet.addRow(header);
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true };
+
+    // Быстрая проверка подключений
+    const connectionSet = new Set<string>();
+    for (const c of connections) {
+      connectionSet.add(`${c.casino_id}-${c.provider_id}`);
+    }
+
+    // Строки по казино
+    for (const casino of casinos) {
+      const row: (string | number)[] = [casino.name];
+      for (const provider of providers) {
+        const has = connectionSet.has(`${casino.id}-${provider.id}`);
+        row.push(has ? '✓' : '');
+      }
+      sheet.addRow(row);
+    }
+
+    // Немного ширины столбцов
+    sheet.getColumn(1).width = 30;
+    for (let i = 0; i < providers.length; i++) {
+      sheet.getColumn(i + 2).width = 18;
+    }
+
+    const filename = `provider_analytics_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (e: any) {
+    console.error('exportProviderAnalyticsXlsx error:', e?.message || e);
+    sendError(res, 500, 'Failed to export provider analytics');
   }
 }
 

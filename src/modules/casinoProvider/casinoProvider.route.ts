@@ -12,6 +12,11 @@ router.get(
   authenticate,
   asyncHandler(casinoProviderController.getProviderAnalytics),
 );
+router.get(
+  '/providers/analytics/export',
+  authenticate,
+  asyncHandler(casinoProviderController.exportProviderAnalyticsXlsx),
+);
 
 router.get(
   '/casinos/:casinoId/providers',
