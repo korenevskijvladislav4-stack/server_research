@@ -4,6 +4,7 @@ import fs from 'fs';
 import ExcelJS from 'exceljs';
 import { parseQueryParams } from '../../common/utils';
 import { casinoBonusService } from './casinoBonus.service';
+import { extractBonusFromImage } from '../../services/ai-bonus-from-image.service';
 import { sendError } from '../../common/response';
 import { AuthRequest } from '../../middleware/auth.middleware';
 
@@ -342,3 +343,50 @@ export async function deleteBonusImage(req: AuthRequest, res: Response): Promise
     sendError(res, 500, 'Failed to delete image');
   }
 }
+
+export async function analyzeBonusImage(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    const casinoId = Number(req.params.casinoId);
+    if (!casinoId) {
+      sendError(res, 400, 'Invalid casinoId');
+      return;
+    }
+
+    const file = (req as any).file as Express.Multer.File | undefined;
+    if (!file) {
+      sendError(res, 400, 'No image provided');
+      return;
+    }
+
+    if (!process.env.OPENAI_API_KEY) {
+      sendError(res, 503, 'AI bonus extraction is not configured');
+      return;
+    }
+
+    const geo =
+      (req.body?.geo as string | undefined) ||
+      (req.query?.geo as string | undefined) ||
+      undefined;
+
+    const suggestions = await extractBonusFromImage(file.path, file.mimetype, { geo: geo ?? null });
+
+    try {
+      if (file.path && fs.existsSync(file.path)) {
+        fs.unlinkSync(file.path);
+      }
+    } catch {
+      // ignore file cleanup errors
+    }
+
+    if (!suggestions) {
+      res.json({ suggestions: null });
+      return;
+    }
+
+    res.json({ suggestions });
+  } catch (e: any) {
+    console.error('analyzeBonusImage error:', e?.message || e);
+    sendError(res, 500, e?.message || 'Failed to analyze bonus image');
+  }
+}
+

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authenticate } from '../../middleware/auth.middleware';
 import { asyncHandler } from '../../middleware/asyncHandler';
-import { bonusImageUpload } from './bonusUpload.middleware';
+import { bonusImageUpload, bonusAiImageUpload } from './bonusUpload.middleware';
 import * as ctrl from './casinoBonus.controller';
 
 const router = Router();
@@ -13,6 +13,21 @@ router.get('/casinos/:casinoId/bonuses', authenticate, asyncHandler(ctrl.listCas
 router.post('/casinos/:casinoId/bonuses', authenticate, asyncHandler(ctrl.createCasinoBonus));
 router.put('/casinos/:casinoId/bonuses/:id', authenticate, asyncHandler(ctrl.updateCasinoBonus));
 router.delete('/casinos/:casinoId/bonuses/:id', authenticate, asyncHandler(ctrl.deleteCasinoBonus));
+
+router.post(
+  '/casinos/:casinoId/bonuses/ai-from-image',
+  authenticate,
+  (req, res, next) => {
+    bonusAiImageUpload(req, res, (err: any) => {
+      if (err) {
+        res.status(400).json({ error: err.message || 'Failed to upload image' });
+        return;
+      }
+      next();
+    });
+  },
+  asyncHandler(ctrl.analyzeBonusImage)
+);
 
 router.post(
   '/casinos/:casinoId/bonuses/:bonusId/images',
