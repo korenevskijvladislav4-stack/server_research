@@ -95,17 +95,59 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
     if (geo) where.geo = geo;
     const bonuses = await prisma.casino_bonuses.findMany({
       where,
-      select: { id: true, casino_id: true, geo: true, name: true, bonus_kind: true, bonus_type: true, status: true },
+      include: {
+        casinos: { select: { name: true } },
+      },
       orderBy: [{ casino_id: 'asc' }, { geo: 'asc' }],
       take: 800,
     });
     push(
       sections,
       'Бонусы (сводка)',
-      bonuses.map(
-        (b) =>
-          `"${b.name}" | GEO: ${b.geo} | вид: ${b.bonus_kind ?? '—'} | тип: ${b.bonus_type ?? '—'} | статус: ${b.status ?? '—'}`,
-      ),
+      bonuses.map((b) => {
+        const casinoName = b.casinos?.name ?? 'Казино без названия (id скрыт)';
+        const valuePart =
+          b.bonus_value != null && b.bonus_unit
+            ? `${b.bonus_value.toString()} ${b.bonus_unit === 'percent' ? '%' : b.currency ?? ''}`
+            : b.cashback_percent != null
+            ? `кэшбэк ${b.cashback_percent.toString()}%`
+            : '—';
+        const minDep = b.min_deposit != null ? `${b.min_deposit.toString()} ${b.currency ?? ''}` : '—';
+        const maxBonus = b.max_bonus != null ? `${b.max_bonus.toString()} ${b.currency ?? ''}` : '—';
+        const wagering =
+          b.wagering_requirement != null
+            ? `${b.wagering_requirement.toString()}x`
+            : b.wagering_freespin != null
+            ? `фриспины: ${b.wagering_freespin.toString()}x`
+            : '—';
+        const period =
+          b.valid_from || b.valid_to
+            ? `${b.valid_from ? new Date(b.valid_from).toISOString().slice(0, 10) : '—'} → ${
+                b.valid_to ? new Date(b.valid_to).toISOString().slice(0, 10) : '—'
+              }`
+            : '—';
+        const promo = b.promo_code ?? '—';
+        const notes = b.notes ? String(b.notes).slice(0, 160) : '';
+
+        return [
+          casinoName,
+          `"${b.name}"`,
+          `GEO: ${b.geo}`,
+          `категория: ${b.bonus_category ?? '—'}`,
+          `вид: ${b.bonus_kind ?? '—'}`,
+          `тип: ${b.bonus_type ?? '—'}`,
+          `значение: ${valuePart}`,
+          `мин. депозит: ${minDep}`,
+          `макс. бонус: ${maxBonus}`,
+          `вейджер: ${wagering}`,
+          `промокод: ${promo}`,
+          `период: ${period}`,
+          `статус: ${b.status ?? '—'}`,
+          notes ? `заметки: ${notes}` : '',
+        ]
+          .filter(Boolean)
+          .join(' | ');
+      }),
     );
   }
 
@@ -115,17 +157,33 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
     if (geo) where.geo = geo;
     const payments = await prisma.casino_payments.findMany({
       where,
-      select: { id: true, casino_id: true, geo: true, direction: true, type: true, method: true },
+      include: {
+        casinos: { select: { name: true } },
+      },
       orderBy: [{ casino_id: 'asc' }, { geo: 'asc' }],
       take: 600,
     });
     push(
       sections,
       'Платёжные методы',
-      payments.map(
-        (p) =>
-          `GEO: ${p.geo} | направление: ${p.direction} | тип: ${p.type} | метод: ${p.method}`,
-      ),
+      payments.map((p) => {
+        const casinoName = p.casinos?.name ?? 'Казино без названия (id скрыт)';
+        const minAmount = p.min_amount != null ? `${p.min_amount.toString()} ${p.currency ?? ''}` : '—';
+        const maxAmount = p.max_amount != null ? `${p.max_amount.toString()} ${p.currency ?? ''}` : '—';
+        const notes = p.notes ? String(p.notes).slice(0, 160) : '';
+        return [
+          casinoName,
+          `GEO: ${p.geo}`,
+          `направление: ${p.direction}`,
+          `тип: ${p.type}`,
+          `метод: ${p.method}`,
+          `мин. сумма: ${minAmount}`,
+          `макс. сумма: ${maxAmount}`,
+          notes ? `заметки: ${notes}` : '',
+        ]
+          .filter(Boolean)
+          .join(' | ');
+      }),
     );
   }
 
@@ -135,17 +193,44 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
     if (geo) where.geo = geo;
     const promos = await prisma.casino_promos.findMany({
       where,
-      select: { id: true, casino_id: true, geo: true, promo_category: true, name: true, status: true },
+      include: {
+        casinos: { select: { name: true } },
+      },
       orderBy: [{ casino_id: 'asc' }],
       take: 400,
     });
     push(
       sections,
       'Промо/турниры',
-      promos.map(
-        (p) =>
-          `"${p.name}" | GEO: ${p.geo} | категория: ${p.promo_category} | статус: ${p.status ?? '—'}`,
-      ),
+      promos.map((p) => {
+        const casinoName = p.casinos?.name ?? 'Казино без названия (id скрыт)';
+        const period =
+          p.period_start || p.period_end
+            ? `${p.period_start ? new Date(p.period_start).toISOString().slice(0, 10) : '—'} → ${
+                p.period_end ? new Date(p.period_end).toISOString().slice(0, 10) : '—'
+              }`
+            : '—';
+        const mechanics = p.mechanics ? String(p.mechanics).slice(0, 160) : '';
+        const prize = p.prize_fund ?? '—';
+        const minBet = p.min_bet ?? '—';
+        const wageringPrize = p.wagering_prize ?? '—';
+
+        return [
+          casinoName,
+          `"${p.name}"`,
+          `GEO: ${p.geo}`,
+          `категория: ${p.promo_category}`,
+          p.promo_type ? `тип промо: ${p.promo_type}` : '',
+          `призовой фонд: ${prize}`,
+          `минимальная ставка: ${minBet}`,
+          `вейджер приза: ${wageringPrize}`,
+          `период: ${period}`,
+          `статус: ${p.status ?? '—'}`,
+          mechanics ? `механика: ${mechanics}` : '',
+        ]
+          .filter(Boolean)
+          .join(' | ');
+      }),
     );
   }
 
