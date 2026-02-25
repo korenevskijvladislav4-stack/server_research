@@ -273,14 +273,31 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
       },
       take: 1500,
     });
+
+    // Агрегируем подключения по провайдеру, чтобы ИИ проще было понять,
+    // в каких казино где именно подключён каждый провайдер.
+    const byProvider = new Map<string, Set<string>>();
+    for (const l of links) {
+      const casinoName = l.casinos?.name ?? 'Казино без названия (id скрыт)';
+      const providerName = l.providers?.name ?? 'Провайдер без названия (id скрыт)';
+      const geoLabel = l.geo ? ` (GEO: ${l.geo})` : '';
+      const casinoEntry = `${casinoName}${geoLabel}`;
+
+      if (!byProvider.has(providerName)) {
+        byProvider.set(providerName, new Set());
+      }
+      byProvider.get(providerName)!.add(casinoEntry);
+    }
+
+    const providerLines = Array.from(byProvider.entries()).map(([providerName, casinosSet]) => {
+      const casinosList = Array.from(casinosSet).join(', ');
+      return `${providerName}: ${casinosList}`;
+    });
+
     push(
       sections,
       'Подключение провайдеров к казино',
-      links.map((l) => {
-        const casinoName = l.casinos?.name ?? 'Казино без названия (id скрыт)';
-        const providerName = l.providers?.name ?? 'Провайдер без названия (id скрыт)';
-        return `${casinoName} — провайдер: ${providerName}${l.geo ? ` (GEO: ${l.geo})` : ''}`;
-      }),
+      providerLines,
       // Для подключений провайдеров важен полный список, поэтому не режем секцию локальным лимитом.
       MAX_KNOWLEDGE_CHARS,
     );
