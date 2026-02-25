@@ -26,6 +26,7 @@ import tagRoutes from './routes/tag.routes';
 import casinoHistoryRoutes from './routes/casinoHistory.routes';
 import casinoPromoRoutes from './routes/casinoPromo.routes';
 import casinoProviderRoutes from './routes/casinoProvider.routes';
+import chatRoutes from './routes/chat.routes';
 import { startEmailSyncScheduler } from './services/email-sync-scheduler.service';
 import { healthCheck } from './controllers/health.controller';
 import { asyncHandler } from './middleware/asyncHandler';
@@ -151,6 +152,7 @@ app.use('/api', tagRoutes);
 app.use('/api', casinoHistoryRoutes);
 app.use('/api', casinoPromoRoutes);
 app.use('/api', casinoProviderRoutes);
+app.use('/api', chatRoutes);
 
 // Health check (with DB probe; 503 if DB unavailable)
 app.get('/api/health', asyncHandler(healthCheck));
