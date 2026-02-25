@@ -106,20 +106,32 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
       'Бонусы (сводка)',
       bonuses.map((b) => {
         const casinoName = b.casinos?.name ?? 'Казино без названия (id скрыт)';
-        const valuePart =
+        const monetaryPart =
           b.bonus_value != null && b.bonus_unit
-            ? `${b.bonus_value.toString()} ${b.bonus_unit === 'percent' ? '%' : b.currency ?? ''}`
-            : b.cashback_percent != null
+            ? `${b.bonus_value.toString()} ${
+                b.bonus_unit === 'percent' ? '%' : b.currency ?? ''
+              }`
+            : null;
+        const freespinPart =
+          b.freespins_count != null
+            ? `${b.freespins_count} фриспинов${
+                b.freespin_value != null ? ` по ${b.freespin_value.toString()} ${b.currency ?? ''}` : ''
+              }${b.freespin_game ? ` в игре ${b.freespin_game}` : ''}`
+            : null;
+        const combinedValue = [monetaryPart, freespinPart].filter(Boolean).join(' + ');
+        const valuePart =
+          combinedValue ||
+          (b.cashback_percent != null
             ? `кэшбэк ${b.cashback_percent.toString()}%`
-            : '—';
+            : '—');
         const minDep = b.min_deposit != null ? `${b.min_deposit.toString()} ${b.currency ?? ''}` : '—';
         const maxBonus = b.max_bonus != null ? `${b.max_bonus.toString()} ${b.currency ?? ''}` : '—';
-        const wagering =
-          b.wagering_requirement != null
-            ? `${b.wagering_requirement.toString()}x`
-            : b.wagering_freespin != null
-            ? `фриспины: ${b.wagering_freespin.toString()}x`
-            : '—';
+        const wageringMoney =
+          b.wagering_requirement != null ? `${b.wagering_requirement.toString()}x` : 'не указано';
+        const wageringFreespin =
+          b.wagering_freespin != null ? `${b.wagering_freespin.toString()}x` : 'не указано';
+        const wageringGames = b.wagering_games ?? 'не указано';
+        const wageringTimeLimit = b.wagering_time_limit ?? 'не указано';
         const period =
           b.valid_from || b.valid_to
             ? `${b.valid_from ? new Date(b.valid_from).toISOString().slice(0, 10) : '—'} → ${
@@ -139,7 +151,10 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
           `значение: ${valuePart}`,
           `мин. депозит: ${minDep}`,
           `макс. бонус: ${maxBonus}`,
-          `вейджер: ${wagering}`,
+          `вейджер (деньги/бонус): ${wageringMoney}`,
+          `вейджер фриспинов: ${wageringFreespin}`,
+          `игры для отыгрыша: ${wageringGames}`,
+          `лимит времени отыгрыша: ${wageringTimeLimit}`,
           `промокод: ${promo}`,
           `период: ${period}`,
           `статус: ${b.status ?? '—'}`,
