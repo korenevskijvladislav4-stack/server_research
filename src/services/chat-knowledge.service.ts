@@ -28,6 +28,10 @@ const VALID_ENTITIES = new Set([
   'geos',
   'casino_tags',
   'comments',
+  // Настройки профиля (этапы сбора данных и поля)
+  'profile_fields',
+  'profile_contexts',
+  'profile_settings',
 ]);
 
 function truncateSection(text: string, max = MAX_SECTION_CHARS): string {
@@ -355,6 +359,88 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
         return `Казино: ${casinoName} | комментарий от ${date}: ${String(c.text).slice(0, 300)}`;
       }),
     );
+  }
+
+  if (need('profile_fields')) {
+    const fields = await prisma.profile_fields.findMany({
+      orderBy: [{ sort_order: 'asc' }, { name: 'asc' }],
+    });
+    push(
+      sections,
+      'Поля профиля (что мы спрашиваем у пользователя)',
+      fields.map((f) => {
+        return `${f.name} | сортировка: ${f.sort_order} | активное: ${f.is_active ? 'да' : 'нет'}`;
+      }),
+      8000,
+    );
+  }
+
+  if (need('profile_contexts')) {
+    const contexts = await prisma.profile_contexts.findMany({
+      orderBy: [{ sort_order: 'asc' }, { name: 'asc' }],
+    });
+    push(
+      sections,
+      'Контексты профиля (этапы, на которых спрашиваем данные)',
+      contexts.map((c) => {
+        return `${c.name} | сортировка: ${c.sort_order} | активный: ${c.is_active ? 'да' : 'нет'}`;
+      }),
+      4000,
+    );
+  }
+
+  if (need('profile_settings')) {
+    const where: { casino_id?: number; geo?: string; value?: boolean } = { value: true };
+    if (casinoId != null) where.casino_id = casinoId;
+    if (geo) where.geo = geo;
+
+    const settings = await prisma.profile_settings.findMany({
+      where,
+      include: {
+        casinos: { select: { name: true } },
+        profile_fields: { select: { name: true } },
+        profile_contexts: { select: { name: true } },
+      },
+      orderBy: [{ field_id: 'asc' }, { context_id: 'asc' }, { casinos: { name: 'asc' } }],
+      take: 2000,
+    });
+
+    // Группируем по паре (поле, контекст), чтобы получить сводку:
+    // какое поле на каком этапе спрашивается и в каких казино/GEO.
+    const grouped: Record<
+      string,
+      { fieldName: string; contextName: string; casinos: string[] }
+    > = {};
+
+    for (const row of settings) {
+      const fieldName = row.profile_fields?.name ?? `field#${row.field_id}`;
+      const contextName = row.profile_contexts?.name ?? `context#${row.context_id}`;
+      const key = `${fieldName}__${contextName}`;
+      const casinoName = row.casinos?.name ?? 'Казино без названия (id скрыт)';
+      const geoLabel = row.geo ? ` (GEO: ${row.geo})` : '';
+      const casinoEntry = `${casinoName}${geoLabel}`;
+
+      if (!grouped[key]) {
+        grouped[key] = { fieldName, contextName, casinos: [] };
+      }
+      if (!grouped[key].casinos.includes(casinoEntry)) {
+        grouped[key].casinos.push(casinoEntry);
+      }
+    }
+
+    const lines = Object.values(grouped).map((g) => {
+      const casinosList = g.casinos.join(', ');
+      return `Поле "${g.fieldName}" в контексте "${g.contextName}" активно в: ${casinosList}`;
+    });
+
+    if (lines.length > 0) {
+      push(
+        sections,
+        'Настройки профиля (в каких казино и на каких этапах спрашиваем поля)',
+        lines,
+        50_000,
+      );
+    }
   }
 
   let out = sections.length > 0 ? sections.join('\n\n') : 'Нет данных по выбранным сущностям.';
