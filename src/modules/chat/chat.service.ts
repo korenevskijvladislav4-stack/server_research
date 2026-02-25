@@ -150,7 +150,7 @@ export const chatService = {
           model: process.env.OPENAI_MODEL || 'openai/gpt-4o-mini',
           messages,
           // Максимально большой лимит токенов для длинных аналитических ответов.
-          max_tokens: 20000,
+          max_tokens: 7000,
           temperature: 0.2,
         });
 
@@ -175,6 +175,141 @@ export const chatService = {
         const err = e as Error;
         assistantText = `Ошибка при запросе к ИИ: ${err?.message ?? String(e)}`;
       }
+    }
+
+    const assistantMsg = await db.chat_messages.create({
+      data: {
+        chat_session_id: sessionId,
+        role: 'assistant',
+        content: assistantText,
+      },
+    });
+
+    await db.chat_sessions.update({
+      where: { id: sessionId },
+      data: { updated_at: new Date() },
+    });
+
+    const firstUserMsg = session.chat_messages.length === 0 && userContent;
+    if (firstUserMsg) {
+      const title = String(userContent).slice(0, 80).trim();
+      await db.chat_sessions.update({
+        where: { id: sessionId },
+        data: { title: title || 'Новый чат' },
+      });
+    }
+
+    return {
+      userMessage: {
+        id: userMsg.id,
+        role: userMsg.role,
+        content: userMsg.content,
+        created_at: userMsg.created_at,
+      },
+      assistantMessage: {
+        id: assistantMsg.id,
+        role: assistantMsg.role,
+        content: assistantMsg.content,
+        created_at: assistantMsg.created_at,
+      },
+    };
+  },
+
+  async addMessageAndReplyStream(
+    sessionId: number,
+    userId: number,
+    userContent: string,
+    onToken: (chunk: string) => void,
+  ): Promise<{
+    userMessage: { id: number; role: string; content: string; created_at: Date | null };
+    assistantMessage: { id: number; role: string; content: string; created_at: Date | null };
+  }> {
+    const session = await db.chat_sessions.findFirst({
+      where: { id: sessionId, user_id: userId },
+      include: {
+        chat_messages: { orderBy: { created_at: 'asc' }, select: { role: true, content: true } },
+      },
+    });
+    if (!session) throw new Error('Chat session not found');
+
+    const userMsg = await db.chat_messages.create({
+      data: {
+        chat_session_id: sessionId,
+        role: 'user',
+        content: userContent,
+      },
+    });
+
+    const openai = getOpenAI();
+    let assistantText = 'Не удалось получить ответ: сервис ИИ не настроен (OPENAI_API_KEY).';
+
+    if (openai) {
+      try {
+        const history = session.chat_messages.slice(-12);
+        const knowledge = await buildKnowledgeContextForQuestion(userContent, history);
+        const messages: OpenAI.ChatCompletionMessageParam[] = [
+          {
+            role: 'system',
+            content:
+              SYSTEM_PROMPT +
+              '\n\n---\nКонтекст из базы данных (только на основе этих данных отвечай на вопросы):\n\n' +
+              knowledge,
+          },
+          ...history.map((m: { role: string; content: string }) => ({
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+          })),
+          { role: 'user', content: userContent },
+        ];
+
+        const stream = await openai.chat.completions.create({
+          model: process.env.OPENAI_MODEL || 'openai/gpt-4o-mini',
+          messages,
+          max_tokens: 20000,
+          temperature: 0.2,
+          stream: true,
+        } as any);
+
+        assistantText = '';
+        let finishReason: string | null = null;
+
+        for await (const part of stream as any) {
+          const delta: string | null =
+            part?.choices?.[0]?.delta?.content != null ? String(part.choices[0].delta.content) : null;
+          if (delta) {
+            assistantText += delta;
+            onToken(delta);
+          }
+
+          const fr = part?.choices?.[0]?.finish_reason;
+          if (fr) {
+            finishReason = String(fr);
+          }
+        }
+
+        const trimmed = assistantText.trim();
+        if (!trimmed) {
+          const fallback =
+            'Не удалось сформировать ответ на основе доступного контекста. Попробуйте переформулировать вопрос или уточнить, какие именно данные вас интересуют.';
+          assistantText = fallback;
+          onToken(fallback);
+        } else {
+          assistantText = trimmed;
+          if (finishReason === 'length') {
+            const note =
+              '\n\n_(Ответ был обрезан по лимиту длины модели. Если нужно, задай уточняющий вопрос или попроси продолжить анализ.)_';
+            assistantText += note;
+            onToken(note);
+          }
+        }
+      } catch (e: unknown) {
+        const err = e as Error;
+        const msg = `Ошибка при запросе к ИИ: ${err?.message ?? String(e)}`;
+        assistantText = msg;
+        onToken(msg);
+      }
+    } else {
+      onToken(assistantText);
     }
 
     const assistantMsg = await db.chat_messages.create({

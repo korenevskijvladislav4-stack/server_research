@@ -107,3 +107,46 @@ export async function sendMessage(req: AuthRequest, res: Response): Promise<void
     sendError(res, 500, err?.message ?? 'Failed to send message');
   }
 }
+
+export async function sendMessageStream(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      sendError(res, 401, 'Unauthorized');
+      return;
+    }
+    const sessionId = Number(req.params.sessionId);
+    if (!sessionId) {
+      sendError(res, 400, 'Invalid sessionId');
+      return;
+    }
+    const content = req.body?.content;
+    if (typeof content !== 'string' || !content.trim()) {
+      sendError(res, 400, 'content is required');
+      return;
+    }
+
+    // Подготавливаем ответ для стриминга текста (chunked transfer).
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    await chatService.addMessageAndReplyStream(sessionId, userId, content.trim(), (chunk) => {
+      res.write(chunk);
+    });
+
+    res.end();
+  } catch (e: unknown) {
+    const err = e as Error;
+    console.error('sendMessageStream error:', err?.message ?? e);
+    if (!res.headersSent) {
+      sendError(res, 500, err?.message ?? 'Failed to send message (stream)');
+    } else {
+      try {
+        res.end();
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
