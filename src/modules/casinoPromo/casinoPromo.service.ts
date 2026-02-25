@@ -83,6 +83,11 @@ export const casinoPromoService = {
         promo_type: data.promo_type != null ? String(data.promo_type) : null,
         period_start: data.period_start ? new Date(data.period_start as string) : null,
         period_end: data.period_end ? new Date(data.period_end as string) : null,
+        period_type: (data.period_type as any) ?? 'fixed',
+        has_participation_button:
+          typeof data.has_participation_button === 'boolean'
+            ? (data.has_participation_button as boolean)
+            : false,
         provider: data.provider != null ? String(data.provider) : null,
         prize_fund: data.prize_fund != null ? String(data.prize_fund) : null,
         mechanics: data.mechanics != null ? String(data.mechanics) : null,
@@ -102,13 +107,34 @@ export const casinoPromoService = {
   },
 
   async update(id: number, _casinoId: number, data: Record<string, unknown>, actorId: number | null) {
-    const allow = ['geo', 'promo_category', 'name', 'promo_type', 'period_start', 'period_end', 'provider', 'prize_fund', 'mechanics', 'min_bet', 'wagering_prize', 'status'];
+    const allow = [
+      'geo',
+      'promo_category',
+      'name',
+      'promo_type',
+      'period_start',
+      'period_end',
+      'period_type',
+      'has_participation_button',
+      'provider',
+      'prize_fund',
+      'mechanics',
+      'min_bet',
+      'wagering_prize',
+      'status',
+    ];
     const updatePayload: Prisma.casino_promosUpdateInput = {};
     if (actorId != null) (updatePayload as any).users_casino_promos_updated_byTousers = { connect: { id: actorId } };
     for (const k of allow) {
       if ((data as any)[k] !== undefined) {
         const v = (data as any)[k];
-        (updatePayload as any)[k] = (k === 'period_start' || k === 'period_end') && v ? new Date(v) : v;
+        if ((k === 'period_start' || k === 'period_end') && v) {
+          (updatePayload as any)[k] = new Date(v);
+        } else if (k === 'has_participation_button') {
+          (updatePayload as any)[k] = Boolean(v);
+        } else {
+          (updatePayload as any)[k] = v;
+        }
       }
     }
     return prisma.casino_promos.update({ where: { id }, data: updatePayload });

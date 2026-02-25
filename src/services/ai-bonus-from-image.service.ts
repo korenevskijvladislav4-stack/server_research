@@ -57,6 +57,10 @@ const BONUS_FROM_IMAGE_SYSTEM_PROMPT = `Ты — помощник аналити
 
 ВАЖНО:
 - Если поле однозначно прочитать нельзя — верни для него null или не включай.
+- Для полей max_win_*_unit используй "coefficient" ТОЛЬКО если на баннере явно указаны множители формата "x10", "10x", "x500" и т.п. Если видно просто сумму выигрыша ("до 1 000 000 RUB", "up to €5000"), это фиксированный лимит, тогда unit = "fixed".
+- Если на баннере написано "макс. выигрыш x10" (или аналогичный множитель), записывай max_win_*_value = 10 и max_win_*_unit = "coefficient". НЕ умножай это число на депозит, сумму бонуса или другие значения — пиши ровно коэффициент из надписи.
+- Если одновременно указаны "макс. бонус 30000" и "макс. выигрыш x10", заполни max_bonus = 30000, max_win_*_value = 10, max_win_*_unit = "coefficient". Не считай и не записывай 300000 ни в какое поле.
+- Если максимальный выигрыш задан коэффициентом, но значение выглядит нереалистично большим (например больше 100), считай, что это ошибка распознавания и верни max_win_*_value и max_win_*_unit как null.
 - Числа пиши как числа, без символов.
 - Даты пиши в формате "YYYY-MM-DD", если на баннере явно виден диапазон.
 
@@ -163,6 +167,32 @@ export async function extractBonusFromImage(
       'status',
       'notes',
     ].forEach(copyIfDefined);
+
+    // Санитизация заведомо некорректных значений max_win с "коэффициентами".
+    const clampCoefficient = (valueKey: string, unitKey: string) => {
+      const rawValue = result[valueKey];
+      const unit = result[unitKey];
+
+      let num: number | null = null;
+      if (typeof rawValue === 'number') {
+        num = rawValue;
+      } else if (typeof rawValue === 'string') {
+        const parsed = parseFloat(rawValue.replace(/\s+/g, ''));
+        if (!Number.isNaN(parsed)) {
+          num = parsed;
+          result[valueKey] = parsed;
+        }
+      }
+
+      if (unit === 'coefficient' && typeof num === 'number' && num > 100) {
+        delete result[valueKey];
+        delete result[unitKey];
+      }
+    };
+
+    clampCoefficient('max_win_cash_value', 'max_win_cash_unit');
+    clampCoefficient('max_win_freespin_value', 'max_win_freespin_unit');
+    clampCoefficient('max_win_percent_value', 'max_win_percent_unit');
 
     return result;
   } catch (error: any) {

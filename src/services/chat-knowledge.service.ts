@@ -229,6 +229,8 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
         const prize = p.prize_fund ?? '—';
         const minBet = p.min_bet ?? '—';
         const wageringPrize = p.wagering_prize ?? '—';
+        const periodType = (p as any).period_type ?? 'fixed';
+        const hasJoinButton = Boolean((p as any).has_participation_button);
 
         return [
           casinoName,
@@ -236,10 +238,12 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
           `GEO: ${p.geo}`,
           `категория: ${p.promo_category}`,
           p.promo_type ? `тип промо: ${p.promo_type}` : '',
+          `тип периода: ${periodType}`,
+          `период: ${period}`,
+          `есть кнопка участия: ${hasJoinButton ? 'да' : 'нет'}`,
           `призовой фонд: ${prize}`,
           `минимальная ставка: ${minBet}`,
           `вейджер приза: ${wageringPrize}`,
-          `период: ${period}`,
           `статус: ${p.status ?? '—'}`,
           mechanics ? `механика: ${mechanics}` : '',
         ]

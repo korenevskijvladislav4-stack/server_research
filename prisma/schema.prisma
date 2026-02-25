@@ -266,6 +266,8 @@ model casino_promos {
   promo_type                            String?                      @db.VarChar(100)
   period_start                          DateTime?                    @db.Date
   period_end                            DateTime?                    @db.Date
+  period_type                           casino_promos_period_type?   @default(fixed)
+  has_participation_button              Boolean?                     @default(false)
   provider                              String?                      @db.VarChar(255)
   prize_fund                            String?                      @db.VarChar(100)
   mechanics                             String?                      @db.Text
@@ -698,6 +700,13 @@ enum casino_profile_history_action {
 enum casino_promos_promo_category {
   tournament
   promotion
+}
+
+enum casino_promos_period_type {
+  fixed
+  daily
+  weekly
+  monthly
 }
 
 enum casino_bonuses_bonus_category {
