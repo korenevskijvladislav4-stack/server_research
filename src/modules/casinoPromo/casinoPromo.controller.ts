@@ -51,7 +51,11 @@ export async function exportPromosXlsx(req: Request, res: Response): Promise<voi
     const promos = rows.map((p) => ({ ...p, casino_name: (p as any).casinos?.name ?? '', casinos: undefined }));
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Промо');
-    const catLabels: Record<string, string> = { tournament: 'Турнир', promotion: 'Акция' };
+    const catLabels: Record<string, string> = {
+      tournament: 'Турнир',
+      promotion: 'Акция',
+      lottery: 'Лотерея',
+    };
     const statusLabels: Record<string, string> = { active: 'Активен', paused: 'Пауза', expired: 'Истёк', draft: 'Черновик' };
     sheet.columns = [
       { header: 'ID', key: 'id', width: 8 },
@@ -71,15 +75,26 @@ export async function exportPromosXlsx(req: Request, res: Response): Promise<voi
     sheet.getRow(1).font = { bold: true };
     for (const r of promos) {
       const b = r as any;
-      const ps = b.period_start ? new Date(b.period_start).toLocaleDateString('ru-RU') : '';
-      const pe = b.period_end ? new Date(b.period_end).toLocaleDateString('ru-RU') : '';
+
+      let periodText = '';
+      if (b.period_type === 'daily') {
+        periodText = 'Ежедневный';
+      } else if (b.period_type === 'weekly') {
+        periodText = 'Еженедельный';
+      } else if (b.period_type === 'monthly') {
+        periodText = 'Ежемесячный';
+      } else {
+        const ps = b.period_start ? new Date(b.period_start).toLocaleDateString('ru-RU') : '';
+        const pe = b.period_end ? new Date(b.period_end).toLocaleDateString('ru-RU') : '';
+        periodText = ps && pe ? `${ps} – ${pe}` : ps || pe || '';
+      }
       sheet.addRow({
         id: b.id,
         geo: b.geo ?? '',
         casino_name: b.casino_name ?? '',
         promo_type: b.promo_type ?? '',
         name: b.name ?? '',
-        period: ps && pe ? `${ps} – ${pe}` : ps || pe || '',
+        period: periodText,
         provider: b.provider ?? '',
         prize_fund: b.prize_fund ?? '',
         mechanics: b.mechanics ?? '',
