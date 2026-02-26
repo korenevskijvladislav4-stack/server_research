@@ -32,6 +32,8 @@ const VALID_ENTITIES = new Set([
   'profile_fields',
   'profile_contexts',
   'profile_settings',
+  // Дополнительные поля профиля казино (per‑casino значения)
+  'casino_profile_values',
 ]);
 
 function truncateSection(text: string, max = MAX_SECTION_CHARS): string {
@@ -204,6 +206,35 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
           .join(' | ');
       }),
     );
+
+    // Агрегированный вид: какие платёжные методы подключены к каким казино и по каким направлениям.
+    const byMethod = new Map<string, Set<string>>();
+    for (const p of payments) {
+      const methodName = p.method || 'Метод без названия';
+      const casinoName = p.casinos?.name ?? 'Казино без названия (id скрыт)';
+      const dir = p.direction ? ` [${p.direction}]` : '';
+      const geoLabel = p.geo ? ` (GEO: ${p.geo})` : '';
+      const entry = `${casinoName}${geoLabel}${dir}`;
+
+      if (!byMethod.has(methodName)) {
+        byMethod.set(methodName, new Set());
+      }
+      byMethod.get(methodName)!.add(entry);
+    }
+
+    const methodLines = Array.from(byMethod.entries()).map(([methodName, casinosSet]) => {
+      const casinosList = Array.from(casinosSet).join(', ');
+      return `${methodName}: ${casinosList}`;
+    });
+
+    if (methodLines.length > 0) {
+      push(
+        sections,
+        'Подключение платёжных методов к казино',
+        methodLines,
+        MAX_SECTION_CHARS,
+      );
+    }
   }
 
   if (need('promos')) {
@@ -359,6 +390,73 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
         return `Казино: ${casinoName} | комментарий от ${date}: ${String(c.text).slice(0, 300)}`;
       }),
     );
+  }
+
+  if (need('casino_profile_values')) {
+    // Дополнительные поля профиля казино (анкетные поля из раздела "Настройки профиля казино").
+    const fields = await prisma.casino_profile_fields.findMany({
+      where: { is_active: true },
+      select: { id: true, key_name: true, label: true, group_name: true },
+      orderBy: [{ group_name: 'asc' }, { sort_order: 'asc' }, { id: 'asc' }],
+    });
+    const fieldById = new Map<number, (typeof fields)[number]>();
+    for (const f of fields) fieldById.set(f.id, f);
+
+    const whereValues: { casino_id?: number } = {};
+    if (casinoId != null) whereValues.casino_id = casinoId;
+
+    const values = await prisma.casino_profile_values.findMany({
+      where: whereValues,
+      include: {
+        casinos: { select: { name: true, geo: true } },
+      },
+      orderBy: [{ casino_id: 'asc' }, { field_id: 'asc' }],
+      take: 5000,
+    });
+
+    const lines = values.map((v) => {
+      const field = fieldById.get(v.field_id);
+      const casinoName = v.casinos?.name ?? 'Казино без названия (id скрыт)';
+      const geo = v.casinos?.geo;
+      const geoStr =
+        geo != null ? (Array.isArray(geo) ? (geo as string[]).join(', ') : String(geo)) : '';
+      let val: unknown = v.value_json;
+      if (typeof val === 'string') {
+        // Пытаемся распарсить строки, которые на самом деле JSON.
+        try {
+          val = JSON.parse(val);
+        } catch {
+          // оставляем как есть
+        }
+      }
+      const valueStr =
+        val == null
+          ? '—'
+          : typeof val === 'string'
+          ? val
+          : JSON.stringify(val).length > 200
+          ? `${JSON.stringify(val).slice(0, 200)}...`
+          : JSON.stringify(val);
+
+      return [
+        casinoName,
+        geoStr ? `GEO: ${geoStr}` : '',
+        field?.group_name ? `группа: ${field.group_name}` : '',
+        field ? `поле: ${field.label} (${field.key_name})` : `field_id: ${v.field_id}`,
+        `значение: ${valueStr}`,
+      ]
+        .filter(Boolean)
+        .join(' | ');
+    });
+
+    if (lines.length > 0) {
+      push(
+        sections,
+        'Дополнительные поля профиля казино',
+        lines,
+        MAX_SECTION_CHARS,
+      );
+    }
   }
 
   if (need('profile_fields')) {
