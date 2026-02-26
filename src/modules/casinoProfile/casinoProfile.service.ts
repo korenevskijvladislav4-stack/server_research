@@ -133,11 +133,17 @@ export const casinoProfileService = {
         });
         const oldVal = existing?.value_json ?? null;
 
-        if (
+        const isClearing =
           item.value_json === null ||
           item.value_json === undefined ||
-          (typeof item.value_json === 'string' && item.value_json === '')
-        ) {
+          (typeof item.value_json === 'string' && item.value_json === '');
+
+        if (isClearing) {
+          // Если и так было пусто — ничего не делаем и историю не пишем.
+          if (oldVal == null) {
+            continue;
+          }
+
           await tx.casino_profile_values.deleteMany({
             where: { casino_id: casinoId, field_id: fieldId },
           });
@@ -164,6 +170,12 @@ export const casinoProfileService = {
         } else {
           newVal = item.value_json;
         }
+
+        // Если новое значение такое же, как старое — ничего не меняем и историю не пишем.
+        if (JSON.stringify(oldVal) === JSON.stringify(newVal)) {
+          continue;
+        }
+
         await tx.casino_profile_values.upsert({
           where: { casino_id_field_id: { casino_id: casinoId, field_id: fieldId } },
           create: {

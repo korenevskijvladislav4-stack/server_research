@@ -126,7 +126,7 @@ export const casinoPaymentService = {
   async create(casinoId: number, data: Record<string, unknown>, actorId: number | null) {
     const direction =
       data.direction === 'withdrawal' ? 'withdrawal' : ('deposit' as 'deposit' | 'withdrawal');
-    return prisma.casino_payments.create({
+    const payment = await prisma.casino_payments.create({
       data: {
         casino_id: casinoId,
         geo: String(data.geo),
@@ -141,6 +141,7 @@ export const casinoPaymentService = {
         updated_by: actorId,
       },
     });
+    return payment;
   },
 
   async getById(id: number, casinoId?: number) {
@@ -182,10 +183,11 @@ export const casinoPaymentService = {
         notes: data.notes === null || data.notes === '' ? null : String(data.notes),
       }),
     };
-    return prisma.casino_payments.update({
+    const after = await prisma.casino_payments.update({
       where: { id },
       data: updatePayload,
     });
+    return after;
   },
 
   async delete(id: number, casinoId: number) {

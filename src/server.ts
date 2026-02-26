@@ -23,7 +23,6 @@ import casinoAccountRoutes from './routes/casinoAccount.routes';
 import slotSelectorRoutes from './routes/slotSelector.routes';
 import imapAccountRoutes from './routes/imapAccount.routes';
 import tagRoutes from './routes/tag.routes';
-import casinoHistoryRoutes from './routes/casinoHistory.routes';
 import casinoPromoRoutes from './routes/casinoPromo.routes';
 import casinoProviderRoutes from './routes/casinoProvider.routes';
 import chatRoutes from './routes/chat.routes';
@@ -149,7 +148,6 @@ app.use('/api', slotSelectorRoutes);
 app.use('/api/imap-accounts', imapAccountRoutes);
 
 app.use('/api', tagRoutes);
-app.use('/api', casinoHistoryRoutes);
 app.use('/api', casinoPromoRoutes);
 app.use('/api', casinoProviderRoutes);
 app.use('/api', chatRoutes);

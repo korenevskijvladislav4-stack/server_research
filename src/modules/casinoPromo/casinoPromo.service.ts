@@ -74,7 +74,7 @@ export const casinoPromoService = {
   },
 
   async create(casinoId: number, data: Record<string, unknown>, actorId: number | null) {
-    return prisma.casino_promos.create({
+    const promo = await prisma.casino_promos.create({
       data: {
         casino_id: casinoId,
         geo: String(data.geo),
@@ -98,6 +98,7 @@ export const casinoPromoService = {
         updated_by: actorId,
       },
     });
+    return promo;
   },
 
   async getById(id: number, casinoId?: number) {
@@ -137,7 +138,8 @@ export const casinoPromoService = {
         }
       }
     }
-    return prisma.casino_promos.update({ where: { id }, data: updatePayload });
+    const after = await prisma.casino_promos.update({ where: { id }, data: updatePayload });
+    return after;
   },
 
   async delete(id: number, casinoId: number) {

@@ -700,6 +700,7 @@ enum casino_profile_history_action {
 enum casino_promos_promo_category {
   tournament
   promotion
+  lottery
 }
 
 enum casino_promos_period_type {
