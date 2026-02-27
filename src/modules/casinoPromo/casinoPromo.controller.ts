@@ -70,6 +70,7 @@ export async function exportPromosXlsx(req: Request, res: Response): Promise<voi
       { header: 'Мин. ставка для участия', key: 'min_bet', width: 20 },
       { header: 'Вейджер на приз', key: 'wagering_prize', width: 16 },
       { header: 'Категория', key: 'promo_category', width: 14 },
+      { header: 'С кнопкой', key: 'has_participation_button', width: 12 },
       { header: 'Статус', key: 'status', width: 10 },
     ];
     sheet.getRow(1).font = { bold: true };
@@ -101,6 +102,12 @@ export async function exportPromosXlsx(req: Request, res: Response): Promise<voi
         min_bet: b.min_bet ?? '',
         wagering_prize: b.wagering_prize ?? '',
         promo_category: catLabels[b.promo_category] ?? b.promo_category,
+        has_participation_button:
+          b.has_participation_button === true
+            ? 'Да'
+            : b.has_participation_button === false
+            ? 'Нет'
+            : '',
         status: statusLabels[b.status] ?? b.status,
       });
     }
