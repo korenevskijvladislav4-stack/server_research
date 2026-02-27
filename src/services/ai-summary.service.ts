@@ -22,6 +22,10 @@ function getClient(): OpenAI | null {
   return client;
 }
 
+function getProviderModel(): string {
+  return process.env.PROVIDER_AI_MODEL || process.env.OPENAI_MODEL || 'openai/gpt-4o-mini';
+}
+
 // ---------------------------------------------------------------------------
 // Strip HTML tags to plain text (lightweight, no extra deps)
 // ---------------------------------------------------------------------------
@@ -319,9 +323,11 @@ export async function extractProviderNamesFromText(
 
     const allExtracted = new Set<string>();
 
+    const providerModel = getProviderModel();
+
     for (const chunk of chunks) {
       const response = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'openai/gpt-4o-mini',
+        model: providerModel,
         messages: [
           { role: 'system', content: EXTRACT_PROVIDERS_SYSTEM },
           {
@@ -353,7 +359,7 @@ export async function extractProviderNamesFromText(
     const canonicalList = existingCanonicalNames.slice(0, 500).join('\n');
     const extractedList = extractedUnion.join('\n');
     const response2 = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'openai/gpt-4o-mini',
+      model: providerModel,
       messages: [
         { role: 'system', content: EXTRACT_PROVIDERS_WITH_CANONICAL_SYSTEM },
         {
