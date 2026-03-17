@@ -79,6 +79,8 @@ model casino_bonuses {
   freespin_value                         Decimal?                       @db.Decimal(10, 2)
   freespin_game                          String?                        @db.VarChar(255)
   cashback_percent                       Decimal?                       @db.Decimal(5, 2)
+  cashback_percent_min                   Decimal?                       @db.Decimal(5, 2)
+  cashback_percent_max                   Decimal?                       @db.Decimal(5, 2)
   cashback_period                        String?                        @db.VarChar(50)
   min_deposit                            Decimal?                       @db.Decimal(10, 2)
   max_bonus                              Decimal?                       @db.Decimal(10, 2)
@@ -230,6 +232,7 @@ model casino_profile_history {
 model casino_profile_values {
   casino_id             Int
   field_id              Int
+  geo                   String               @default("ALL") @db.VarChar(10)
   value_json            Json?
   updated_at            DateTime?             @default(now()) @db.Timestamp(0)
   updated_by            Int?
@@ -237,7 +240,7 @@ model casino_profile_values {
   casino_profile_fields casino_profile_fields @relation(fields: [field_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "casino_profile_values_ibfk_2")
   users                 users?                @relation(fields: [updated_by], references: [id], onUpdate: NoAction, map: "casino_profile_values_ibfk_3")
 
-  @@id([casino_id, field_id])
+  @@id([casino_id, field_id, geo])
   @@index([field_id], map: "field_id")
   @@index([updated_at], map: "idx_updated_at")
   @@index([updated_by], map: "updated_by")

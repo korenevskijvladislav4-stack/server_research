@@ -153,6 +153,10 @@ export const casinoBonusService = {
         freespin_value: data.freespin_value != null ? Number(data.freespin_value) : null,
         freespin_game: data.freespin_game != null ? String(data.freespin_game) : null,
         cashback_percent: data.cashback_percent != null ? Number(data.cashback_percent) : null,
+        cashback_percent_min:
+          data.cashback_percent_min != null ? Number(data.cashback_percent_min) : null,
+        cashback_percent_max:
+          data.cashback_percent_max != null ? Number(data.cashback_percent_max) : null,
         cashback_period: data.cashback_period != null ? String(data.cashback_period) : null,
         min_deposit: data.min_deposit != null ? Number(data.min_deposit) : null,
         max_bonus: data.max_bonus != null ? Number(data.max_bonus) : null,
@@ -219,6 +223,12 @@ export const casinoBonusService = {
       ...(data.freespin_game !== undefined && { freespin_game: toStr(data.freespin_game) }),
       ...(data.cashback_percent !== undefined && {
         cashback_percent: toNum(data.cashback_percent),
+      }),
+      ...(data.cashback_percent_min !== undefined && {
+        cashback_percent_min: toNum(data.cashback_percent_min),
+      }),
+      ...(data.cashback_percent_max !== undefined && {
+        cashback_percent_max: toNum(data.cashback_percent_max),
       }),
       ...(data.cashback_period !== undefined && {
         cashback_period: toStr(data.cashback_period),

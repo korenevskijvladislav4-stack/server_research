@@ -87,7 +87,8 @@ export async function getCasinoProfile(req: Request, res: Response): Promise<voi
       sendError(res, 400, 'Invalid casinoId');
       return;
     }
-    const profile = await casinoProfileService.getCasinoProfile(casinoId);
+    const geoParam = typeof req.query.geo === 'string' && req.query.geo.trim() ? req.query.geo.trim() : undefined;
+    const profile = await casinoProfileService.getCasinoProfile(casinoId, geoParam);
     res.json(profile);
   } catch (e) {
     console.error('getCasinoProfile error:', e);
@@ -107,7 +108,8 @@ export async function upsertCasinoProfile(req: AuthRequest, res: Response): Prom
       sendError(res, 400, 'items[] is required');
       return;
     }
-    await casinoProfileService.upsertCasinoProfile(casinoId, items, req.user?.id ?? null);
+    const geoParam = typeof req.query.geo === 'string' && req.query.geo.trim() ? req.query.geo.trim() : undefined;
+    await casinoProfileService.upsertCasinoProfile(casinoId, items, req.user?.id ?? null, geoParam);
     res.json({ message: 'Profile updated' });
   } catch (e) {
     console.error('upsertCasinoProfile error:', e);

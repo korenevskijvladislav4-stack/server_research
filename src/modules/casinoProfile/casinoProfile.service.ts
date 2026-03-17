@@ -99,36 +99,56 @@ export const casinoProfileService = {
     return prisma.casino_profile_fields.delete({ where: { id } });
   },
 
-  async getCasinoProfile(casinoId: number) {
+  async getCasinoProfile(casinoId: number, geo?: string | null) {
+    const effectiveGeo = geo?.trim() || undefined;
     const fields = await prisma.casino_profile_fields.findMany({
       where: { is_active: true },
       orderBy: [{ group_name: 'asc' }, { sort_order: 'asc' }, { id: 'asc' }],
     });
-    const values = await prisma.casino_profile_values.findMany({
-      where: { casino_id: casinoId },
+    const where: Prisma.casino_profile_valuesWhereInput = effectiveGeo
+      ? {
+          casino_id: casinoId,
+          OR: [{ geo: effectiveGeo }, { geo: 'ALL' }],
+        }
+      : { casino_id: casinoId };
+
+    const values = await prisma.casino_profile_values.findMany({ where });
+    const byFieldId = new Map<string, (typeof values)[number]>();
+    for (const v of values) {
+      const key = `${v.field_id}::${v.geo}`;
+      byFieldId.set(key, v);
+    }
+    const profile = fields.map((f) => {
+      const keyGeo = effectiveGeo ? `${f.id}::${effectiveGeo}` : `${f.id}::ALL`;
+      const keyFallback = `${f.id}::ALL`;
+      const val =
+        (geo && byFieldId.get(keyGeo)) ||
+        byFieldId.get(keyFallback) ||
+        null;
+      return {
+        field: f,
+        value: val?.value_json ?? null,
+        updated_at: val?.updated_at ?? null,
+        updated_by: val?.updated_by ?? null,
+      };
     });
-    const byFieldId = new Map(values.map((v) => [v.field_id, v]));
-    const profile = fields.map((f) => ({
-      field: f,
-      value: byFieldId.get(f.id)?.value_json ?? null,
-      updated_at: byFieldId.get(f.id)?.updated_at ?? null,
-      updated_by: byFieldId.get(f.id)?.updated_by ?? null,
-    }));
     return { casino_id: casinoId, profile };
   },
 
   async upsertCasinoProfile(
     casinoId: number,
     items: Array<{ field_id: number; value_json: unknown }>,
-    actorId: number | null
+    actorId: number | null,
+    geo?: string | null
   ) {
+    const effectiveGeo = geo?.trim() || 'ALL';
     await prisma.$transaction(async (tx) => {
       for (const item of items) {
         const fieldId = Number(item.field_id);
         if (!fieldId) continue;
 
         const existing = await tx.casino_profile_values.findUnique({
-          where: { casino_id_field_id: { casino_id: casinoId, field_id: fieldId } },
+          where: { casino_id_field_id_geo: { casino_id: casinoId, field_id: fieldId, geo: effectiveGeo } },
           select: { value_json: true },
         });
         const oldVal = existing?.value_json ?? null;
@@ -145,7 +165,7 @@ export const casinoProfileService = {
           }
 
           await tx.casino_profile_values.deleteMany({
-            where: { casino_id: casinoId, field_id: fieldId },
+            where: { casino_id: casinoId, field_id: fieldId, geo: effectiveGeo },
           });
           await tx.casino_profile_history.create({
             data: {
@@ -177,10 +197,11 @@ export const casinoProfileService = {
         }
 
         await tx.casino_profile_values.upsert({
-          where: { casino_id_field_id: { casino_id: casinoId, field_id: fieldId } },
+          where: { casino_id_field_id_geo: { casino_id: casinoId, field_id: fieldId, geo: effectiveGeo } },
           create: {
             casino_id: casinoId,
             field_id: fieldId,
+            geo: effectiveGeo,
             value_json: newVal as object,
             updated_by: actorId,
           },

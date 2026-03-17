@@ -326,21 +326,48 @@ const createTables = async () => {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
-    // Casino profile values (per casino, per field)
+    // Casino profile values (per casino, per field, optionally per GEO)
     await connection.query(`
       CREATE TABLE IF NOT EXISTS casino_profile_values (
         casino_id INT NOT NULL,
         field_id INT NOT NULL,
+        geo VARCHAR(10) NOT NULL DEFAULT 'ALL',
         value_json JSON NULL,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         updated_by INT NULL,
-        PRIMARY KEY (casino_id, field_id),
+        PRIMARY KEY (casino_id, field_id, geo),
         FOREIGN KEY (casino_id) REFERENCES casinos(id) ON DELETE CASCADE,
         FOREIGN KEY (field_id) REFERENCES casino_profile_fields(id) ON DELETE CASCADE,
         FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
         INDEX idx_updated_at (updated_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+
+    // Migrate older databases: add geo column + composite PK if they don't exist yet
+    const [geoColRowsProfileValues] = await connection.query<any[]>(`
+      SELECT COUNT(*) AS cnt
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'casino_profile_values'
+        AND COLUMN_NAME = 'geo'
+    `);
+    const geoColExistsProfileValues =
+      Array.isArray(geoColRowsProfileValues) && geoColRowsProfileValues[0]?.cnt > 0;
+
+    if (!geoColExistsProfileValues) {
+      // 1) Add geo column with default 'ALL'
+      await connection.query(`
+        ALTER TABLE casino_profile_values
+        ADD COLUMN geo VARCHAR(10) NOT NULL DEFAULT 'ALL' AFTER field_id
+      `);
+
+      // 2) Switch primary key to (casino_id, field_id, geo)
+      await connection.query(`
+        ALTER TABLE casino_profile_values
+        DROP PRIMARY KEY,
+        ADD PRIMARY KEY (casino_id, field_id, geo)
+      `);
+    }
 
     // Casino profile history (audit trail)
     await connection.query(`

@@ -402,24 +402,23 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
     const fieldById = new Map<number, (typeof fields)[number]>();
     for (const f of fields) fieldById.set(f.id, f);
 
-    const whereValues: { casino_id?: number } = {};
+    const whereValues: { casino_id?: number; geo?: string } = {};
     if (casinoId != null) whereValues.casino_id = casinoId;
+    if (geo) whereValues.geo = geo;
 
     const values = await prisma.casino_profile_values.findMany({
       where: whereValues,
       include: {
-        casinos: { select: { name: true, geo: true } },
+        casinos: { select: { name: true } },
       },
-      orderBy: [{ casino_id: 'asc' }, { field_id: 'asc' }],
+      orderBy: [{ casino_id: 'asc' }, { field_id: 'asc' }, { geo: 'asc' }],
       take: 5000,
     });
 
     const lines = values.map((v) => {
       const field = fieldById.get(v.field_id);
       const casinoName = v.casinos?.name ?? 'Казино без названия (id скрыт)';
-      const geo = v.casinos?.geo;
-      const geoStr =
-        geo != null ? (Array.isArray(geo) ? (geo as string[]).join(', ') : String(geo)) : '';
+      const profileGeo = v.geo || 'ALL';
       let val: unknown = v.value_json;
       if (typeof val === 'string') {
         // Пытаемся распарсить строки, которые на самом деле JSON.
@@ -440,7 +439,7 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
 
       return [
         casinoName,
-        geoStr ? `GEO: ${geoStr}` : '',
+        profileGeo ? `GEO профиля: ${profileGeo}` : '',
         field?.group_name ? `группа: ${field.group_name}` : '',
         field ? `поле: ${field.label} (${field.key_name})` : `field_id: ${v.field_id}`,
         `значение: ${valueStr}`,
