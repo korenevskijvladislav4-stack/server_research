@@ -60,17 +60,25 @@ export const deleteManualScreenshot = async (
       return;
     }
 
-    // Best-effort file cleanup (DB delete should still succeed)
-    try {
-      if (screenshot.screenshot_path) {
-        fs.unlinkSync(screenshot.screenshot_path);
+    const selectorId = screenshot.selectors.id;
+
+    // Clean all screenshot files for this MANUAL selector (best-effort).
+    const screenshots = await prisma.screenshots.findMany({
+      where: { selector_id: selectorId },
+      select: { screenshot_path: true },
+    });
+    for (const s of screenshots) {
+      if (!s.screenshot_path) continue;
+      try {
+        fs.unlinkSync(s.screenshot_path);
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
     }
 
-    await prisma.screenshots.delete({
-      where: { id: screenshotId },
+    // Delete screenshots + selector. screenshots have Cascade on selectors.
+    await prisma.selectors.delete({
+      where: { id: selectorId },
     });
 
     res.status(204).send();
