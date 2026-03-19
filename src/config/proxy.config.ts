@@ -1,4 +1,4 @@
-import { GeoProxyMapping, ProxyConfig } from '../models/SlotSelector';
+import { GeoProxyMapping, ProxyConfig } from '../models/Selector';
 
 /**
  * Proxy configuration for different GEOs

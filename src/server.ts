@@ -20,7 +20,7 @@ import profileFieldRoutes from './routes/profileField.routes';
 import profileContextRoutes from './routes/profileContext.routes';
 import profileSettingRoutes from './routes/profileSetting.routes';
 import casinoAccountRoutes from './routes/casinoAccount.routes';
-import slotSelectorRoutes from './routes/slotSelector.routes';
+import selectorsRoutes from './routes/selectors.routes';
 import imapAccountRoutes from './routes/imapAccount.routes';
 import tagRoutes from './routes/tag.routes';
 import casinoPromoRoutes from './routes/casinoPromo.routes';
@@ -144,7 +144,7 @@ app.use('/api/profile-fields', profileFieldRoutes);
 app.use('/api/profile-contexts', profileContextRoutes);
 app.use('/api/profile-settings', profileSettingRoutes);
 app.use('/api', casinoAccountRoutes);
-app.use('/api', slotSelectorRoutes);
+app.use('/api', selectorsRoutes);
 app.use('/api/imap-accounts', imapAccountRoutes);
 
 app.use('/api', tagRoutes);

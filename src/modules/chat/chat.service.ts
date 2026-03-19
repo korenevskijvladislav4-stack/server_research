@@ -276,15 +276,14 @@ export const chatService = {
         for await (const part of stream as any) {
           const delta: string | null =
             part?.choices?.[0]?.delta?.content != null ? String(part.choices[0].delta.content) : null;
+
           if (delta) {
             assistantText += delta;
             onToken(delta);
           }
 
           const fr = part?.choices?.[0]?.finish_reason;
-          if (fr) {
-            finishReason = String(fr);
-          }
+          if (fr) finishReason = String(fr);
         }
 
         const trimmed = assistantText.trim();

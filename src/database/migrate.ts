@@ -867,9 +867,9 @@ const createTables = async () => {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
-    // Slot selectors table - для хранения селекторов по GEO и категориям
+    // Selectors table - для хранения селекторов по GEO и категориям
     await connection.query(`
-      CREATE TABLE IF NOT EXISTS slot_selectors (
+      CREATE TABLE IF NOT EXISTS selectors (
         id INT AUTO_INCREMENT PRIMARY KEY,
         casino_id INT NOT NULL,
         geo VARCHAR(10) NOT NULL,
@@ -891,7 +891,7 @@ const createTables = async () => {
       SELECT COUNT(*) AS cnt
       FROM INFORMATION_SCHEMA.COLUMNS
       WHERE TABLE_SCHEMA = DATABASE()
-        AND TABLE_NAME = 'slot_selectors'
+        AND TABLE_NAME = 'selectors'
         AND COLUMN_NAME = 'section'
     `);
     const sectionColExists = Array.isArray(sectionColRows) && sectionColRows[0]?.cnt > 0;
@@ -899,10 +899,10 @@ const createTables = async () => {
     if (!sectionColExists) {
       try {
         await connection.query(`
-          ALTER TABLE slot_selectors
+          ALTER TABLE selectors
           ADD COLUMN section VARCHAR(255) NOT NULL DEFAULT 'Основной' AFTER geo
         `);
-        console.log('Added section column to slot_selectors');
+        console.log('Added section column to selectors');
       } catch (e: any) {
         console.error('Error adding section column:', e.message);
       }
@@ -913,7 +913,7 @@ const createTables = async () => {
       SELECT COUNT(*) AS cnt
       FROM INFORMATION_SCHEMA.COLUMNS
       WHERE TABLE_SCHEMA = DATABASE()
-        AND TABLE_NAME = 'slot_selectors'
+        AND TABLE_NAME = 'selectors'
         AND COLUMN_NAME = 'url'
     `);
     const urlColExists = Array.isArray(urlColRows) && urlColRows[0]?.cnt > 0;
@@ -921,10 +921,10 @@ const createTables = async () => {
     if (!urlColExists) {
       try {
         await connection.query(`
-          ALTER TABLE slot_selectors
+          ALTER TABLE selectors
           ADD COLUMN url VARCHAR(500) NULL AFTER selector
         `);
-        console.log('Added url column to slot_selectors');
+        console.log('Added url column to selectors');
       } catch (e: any) {
         console.error('Error adding url column:', e.message);
       }
@@ -933,7 +933,7 @@ const createTables = async () => {
     // Update category to be nullable if it's not already
     try {
       await connection.query(`
-        ALTER TABLE slot_selectors
+        ALTER TABLE selectors
         MODIFY COLUMN category VARCHAR(255) NULL
       `);
       console.log('Updated category column to be nullable');
@@ -943,14 +943,14 @@ const createTables = async () => {
       }
     }
 
-    // Slot screenshots table - для хранения скриншотов селекторов
+    // Screenshots table - для хранения скриншотов селекторов
     await connection.query(`
-      CREATE TABLE IF NOT EXISTS slot_screenshots (
+      CREATE TABLE IF NOT EXISTS screenshots (
         id INT AUTO_INCREMENT PRIMARY KEY,
         selector_id INT NOT NULL,
         screenshot_path VARCHAR(500) NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (selector_id) REFERENCES slot_selectors(id) ON DELETE CASCADE,
+        FOREIGN KEY (selector_id) REFERENCES selectors(id) ON DELETE CASCADE,
         INDEX idx_selector_id (selector_id),
         INDEX idx_created_at (created_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -1,1 +1,1 @@
-export { default } from '../modules/slots/slot.route';
+export { default } from '../modules/screenshots/slot.route';
