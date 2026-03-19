@@ -18,7 +18,7 @@ router.post(
   (req, res, next) => {
     promoImageUpload(req, res, (err: any) => {
       if (err) {
-        res.status(400).json({ error: err.message || 'Failed to upload images' });
+        res.status(400).json({ error: err.message || 'Ошибка загрузки файла' });
         return;
       }
       next();

@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs';
+import { AppError } from '../../errors/AppError';
 import prisma from '../../lib/prisma';
 import { users, users_role } from '@prisma/client';
 import { calculateTotalPages } from '../../common/utils/query.utils';
@@ -66,7 +67,9 @@ export const usersService = {
     const existing = await prisma.users.findFirst({
       where: { OR: [{ email: data.email.trim() }, { username: data.username.trim() }] },
     });
-    if (existing) throw new Error('USER_EXISTS');
+    if (existing) {
+      throw new AppError(400, 'Пользователь с таким email или именем уже существует');
+    }
 
     const hashed = await bcrypt.hash(data.password, 10);
     return prisma.users.create({
@@ -94,7 +97,9 @@ export const usersService = {
       const duplicate = await prisma.users.findFirst({
         where: { OR: or, NOT: { id } },
       });
-      if (duplicate) throw new Error('EMAIL_OR_USERNAME_TAKEN');
+      if (duplicate) {
+        throw new AppError(400, 'Email или имя пользователя заняты другим пользователем');
+      }
     }
 
     const updateData: Record<string, unknown> = {};

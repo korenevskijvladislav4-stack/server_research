@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { getConfig } from '../../config/env';
-import { sendError } from '../../common/response';
 import { AppError } from '../../errors/AppError';
 import { authService } from './auth.service';
 
@@ -10,8 +9,7 @@ export async function register(req: Request, res: Response): Promise<void> {
 
   const existing = await authService.findUserByEmailOrUsername(email, username);
   if (existing) {
-    sendError(res, 400, 'User already exists');
-    return;
+    throw new AppError(400, 'Пользователь уже существует');
   }
 
   await authService.createUser(username, email, password);
@@ -24,46 +22,36 @@ export async function login(req: Request, res: Response): Promise<void> {
 
   const user = await authService.findUserByEmail(email);
   if (!user) {
-    sendError(res, 401, 'Неверный email или пароль');
-    return;
+    throw new AppError(401, 'Неверный email или пароль');
   }
 
   if (!user.password) {
-    throw new AppError(500, 'User data error', 'MISSING_PASSWORD');
+    throw new AppError(500, 'Ошибка данных пользователя', 'MISSING_PASSWORD');
   }
 
   if (!user.is_active) {
-    sendError(res, 401, 'Аккаунт деактивирован');
-    return;
+    throw new AppError(401, 'Аккаунт деактивирован');
   }
 
   const valid = await authService.validatePassword(String(password), user.password);
   if (!valid) {
-    sendError(res, 401, 'Неверный email или пароль');
-    return;
+    throw new AppError(401, 'Неверный email или пароль');
   }
 
   const role = user.role ?? 'user';
-  try {
-    const token = jwt.sign(
-      { id: user.id, email: user.email, role },
-      config.jwt.secret,
-      { expiresIn: config.jwt.expiresIn } as jwt.SignOptions
-    );
-    res.json({
-      token,
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        role,
-      },
-    });
-  } catch (err) {
-    throw new AppError(
-      500,
-      err instanceof Error ? err.message : 'Token generation failed',
-      'JWT_ERROR'
-    );
-  }
+  const token = jwt.sign(
+    { id: user.id, email: user.email, role },
+    config.jwt.secret,
+    { expiresIn: config.jwt.expiresIn } as jwt.SignOptions,
+  );
+
+  res.json({
+    token,
+    user: {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      role,
+    },
+  });
 }

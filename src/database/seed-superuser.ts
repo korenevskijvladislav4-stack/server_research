@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
-import pool from './connection';
+import prisma from '../lib/prisma';
 
 dotenv.config();
 
@@ -20,39 +20,28 @@ async function seedSuperuser(): Promise<void> {
 
   const passwordHash = await bcrypt.hash(password, 10);
 
-  const conn = await pool.getConnection();
-  try {
-    // if exists by email -> update; else insert
-    const [existing] = await conn.query('SELECT id FROM users WHERE email = ? LIMIT 1', [email]);
+  const existing = await prisma.users.findFirst({
+    where: { email },
+    select: { id: true },
+  });
 
-    if (Array.isArray(existing) && existing.length > 0) {
-      const id = (existing[0] as any).id;
-      await conn.query(
-        'UPDATE users SET username = ?, password = ?, role = ? WHERE id = ?',
-        [username, passwordHash, role, id]
-      );
-      // eslint-disable-next-line no-console
-      console.log(`✅ Superuser updated: id=${id}, email=${email}`);
-      return;
-    }
-
-    const [result] = await conn.query(
-      'INSERT INTO users (username, email, password, role) VALUES (?, ?, ?, ?)',
-      [username, email, passwordHash, role]
-    );
-    const insertId = (result as any).insertId;
-    // eslint-disable-next-line no-console
-    console.log(`✅ Superuser created: id=${insertId}, email=${email}`);
-  } finally {
-    conn.release();
+  if (existing) {
+    await prisma.users.update({
+      where: { id: existing.id },
+      data: { username, password: passwordHash, role },
+    });
+    console.log(`✅ Superuser updated: id=${existing.id}, email=${email}`);
+  } else {
+    const created = await prisma.users.create({
+      data: { username, email, password: passwordHash, role },
+    });
+    console.log(`✅ Superuser created: id=${created.id}, email=${email}`);
   }
 }
 
 seedSuperuser()
   .then(() => process.exit(0))
   .catch((err) => {
-    // eslint-disable-next-line no-console
     console.error('❌ seed-superuser failed:', err);
     process.exit(1);
   });
-

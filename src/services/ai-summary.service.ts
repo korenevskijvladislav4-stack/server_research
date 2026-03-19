@@ -1,10 +1,5 @@
 import OpenAI from 'openai';
-import pool from '../database/connection';
-import { RowDataPacket } from 'mysql2';
-
-// ---------------------------------------------------------------------------
-// OpenAI client (lazy init)
-// ---------------------------------------------------------------------------
+import prisma from '../lib/prisma';
 
 let client: OpenAI | null = null;
 
@@ -26,10 +21,6 @@ function getProviderModel(): string {
   return process.env.PROVIDER_AI_MODEL || process.env.OPENAI_MODEL || 'openai/gpt-4o-mini';
 }
 
-// ---------------------------------------------------------------------------
-// Strip HTML tags to plain text (lightweight, no extra deps)
-// ---------------------------------------------------------------------------
-
 function htmlToText(html: string): string {
   return html
     .replace(/<style[\s\S]*?<\/style>/gi, '')
@@ -44,10 +35,6 @@ function htmlToText(html: string): string {
     .replace(/\s+/g, ' ')
     .trim();
 }
-
-// ---------------------------------------------------------------------------
-// Summarize a single email
-// ---------------------------------------------------------------------------
 
 const SYSTEM_PROMPT = `Ты — помощник аналитика в исследовательской компании, которая анализирует онлайн-казино.
 Тебе приходят письма от различных казино (партнёрки, промо, бонусы, KYC, поддержка и т.д.).
@@ -64,22 +51,17 @@ export async function summarizeEmail(emailId: number): Promise<string | null> {
   if (!openai) return null;
 
   try {
-    // Get email content
-    const [rows] = await pool.query<RowDataPacket[]>(
-      'SELECT subject, from_name, from_email, body_text, body_html FROM emails WHERE id = ?',
-      [emailId],
-    );
-    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const email = await prisma.emails.findUnique({
+      where: { id: emailId },
+      select: { subject: true, from_name: true, from_email: true, body_text: true, body_html: true },
+    });
+    if (!email) return null;
 
-    const email = rows[0] as any;
-
-    // Build text content (prefer body_text, fallback to stripped HTML)
     let body = email.body_text || '';
     if (!body && email.body_html) {
       body = htmlToText(email.body_html);
     }
 
-    // Truncate to ~2000 chars to save tokens
     if (body.length > 2000) {
       body = body.slice(0, 2000) + '…';
     }
@@ -104,7 +86,7 @@ export async function summarizeEmail(emailId: number): Promise<string | null> {
     const summary = response.choices[0]?.message?.content?.trim() || null;
 
     if (summary) {
-      await pool.query('UPDATE emails SET ai_summary = ? WHERE id = ?', [summary, emailId]);
+      await prisma.emails.update({ where: { id: emailId }, data: { ai_summary: summary } });
     }
 
     return summary;
@@ -113,10 +95,6 @@ export async function summarizeEmail(emailId: number): Promise<string | null> {
     return null;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Summarize specific emails by IDs (only new ones from sync)
-// ---------------------------------------------------------------------------
 
 export async function summarizeEmailsByIds(ids: number[]): Promise<number> {
   if (!ids || ids.length === 0) return 0;
@@ -139,10 +117,6 @@ export async function summarizeEmailsByIds(ids: number[]): Promise<number> {
   return count;
 }
 
-// ---------------------------------------------------------------------------
-// Assign email topic (theme) by AI from configurable list
-// ---------------------------------------------------------------------------
-
 const TOPIC_SYSTEM = `Ты — классификатор писем. Тебе дают список тем писем с описаниями и текст письма (тема + тело).
 Выбери ОДНУ тему, которая лучше всего подходит к письму, опираясь на описание темы. Если ни одна тема не подходит — верни 0.
 Отвечай ТОЛЬКО одним числом: id выбранной темы или 0. Никакого текста.`;
@@ -152,18 +126,18 @@ export async function assignEmailTopic(emailId: number): Promise<number | null> 
   if (!openai) return null;
 
   try {
-    const [topicRows] = await pool.query<RowDataPacket[]>(
-      'SELECT id, name, description FROM email_topics ORDER BY sort_order ASC, name ASC',
-    );
-    const topics = (topicRows || []) as { id: number; name: string; description?: string | null }[];
+    const topics = await prisma.email_topics.findMany({
+      orderBy: [{ sort_order: 'asc' }, { name: 'asc' }],
+      select: { id: true, name: true, description: true },
+    });
     if (topics.length === 0) return null;
 
-    const [emailRows] = await pool.query<RowDataPacket[]>(
-      'SELECT subject, from_name, from_email, body_text, body_html FROM emails WHERE id = ?',
-      [emailId],
-    );
-    if (!Array.isArray(emailRows) || emailRows.length === 0) return null;
-    const email = emailRows[0] as any;
+    const email = await prisma.emails.findUnique({
+      where: { id: emailId },
+      select: { subject: true, from_name: true, from_email: true, body_text: true, body_html: true },
+    });
+    if (!email) return null;
+
     let body = email.body_text || '';
     if (!body && email.body_html) body = htmlToText(email.body_html);
     if (body.length > 2500) body = body.slice(0, 2500) + '…';
@@ -191,7 +165,7 @@ export async function assignEmailTopic(emailId: number): Promise<number | null> 
     const content = response.choices[0]?.message?.content?.trim() || '';
     const num = parseInt(content.replace(/\D/g, ''), 10);
     const topicId = Number.isNaN(num) ? null : num === 0 ? null : topics.some((t) => t.id === num) ? num : null;
-    await pool.query('UPDATE emails SET topic_id = ? WHERE id = ?', [topicId, emailId]);
+    await prisma.emails.update({ where: { id: emailId }, data: { topic_id: topicId } });
     return topicId;
   } catch (error: any) {
     console.error(`assignEmailTopic error for email ${emailId}:`, error?.message || error);
@@ -215,11 +189,6 @@ export async function assignEmailTopicsByIds(ids: number[]): Promise<number> {
   if (count > 0) console.log(`AI assigned topics to ${count} email(s)`);
   return count;
 }
-
-// ---------------------------------------------------------------------------
-// Extract provider names from arbitrary text (HTML, JSON, or plain list)
-// Used for "Подключенные провайдеры" on casino profile: user pastes content, we extract names
-// ---------------------------------------------------------------------------
 
 const EXTRACT_PROVIDERS_SYSTEM = `Ты — помощник по извлечению структурированных данных. Контекст: онлайн-казино, провайдеры игр (слоты, настольные игры и т.д.). Примеры названий провайдеров: Pragmatic Play, NetEnt, Microgaming, Play'n GO, Evolution, Red Tiger, Yggdrasil, Hacksaw Gaming, Nolimit City, Big Time Gaming, ELK Studios, PG Soft.
 
@@ -270,10 +239,9 @@ export async function extractProviderNamesFromText(
   existingCanonicalNames: string[] = [],
 ): Promise<string[]> {
   const openai = getClient();
-  const text = rawText.trim().slice(0, 100000); // limit input size, но стараемся не терять хвост списков
+  const text = rawText.trim().slice(0, 100000);
   if (!text) return [];
 
-  // 1) Детектор "чистого списка" — без AI вообще, чтобы не терять элементы
   const lines = text
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -283,11 +251,9 @@ export async function extractProviderNamesFromText(
     lines.length >= 5 &&
     lines.length <= 1000 &&
     lines.every((l) => {
-      // без HTML/JSON шумов, длина разумная, не похоже на сплошной текст
       if (l.length > 80) return false;
       if (/[{}<>]/.test(l)) return false;
       if (/https?:\/\//i.test(l)) return false;
-      // допускаем пробелы, но не хотим совсем длинных описаний
       return true;
     });
 
@@ -296,7 +262,6 @@ export async function extractProviderNamesFromText(
     if (existingCanonicalNames.length === 0) {
       return unique;
     }
-    // Если есть канон — нормализуем к нему без потери элементов
     const lowerCanonical = existingCanonicalNames.map((n) => n.toLowerCase());
     return unique.map((name) => {
       const idx = lowerCanonical.indexOf(name.toLowerCase());
@@ -307,7 +272,6 @@ export async function extractProviderNamesFromText(
   if (!openai) return [];
 
   try {
-    // 2) Для сложного текста — режем на чанки, чтобы не терять хвост
     const maxChunkLength = 4000;
     const chunks: string[] = [];
     let remaining = text;
@@ -355,7 +319,6 @@ export async function extractProviderNamesFromText(
       return extractedUnion;
     }
 
-    // 3) Нормализация к каноническим без потери элементов
     const canonicalList = existingCanonicalNames.slice(0, 500).join('\n');
     const extractedList = extractedUnion.join('\n');
     const response2 = await openai.chat.completions.create({

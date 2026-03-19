@@ -1,25 +1,15 @@
 import path from 'path';
 import fs from 'fs';
 import puppeteer, { Browser } from 'puppeteer';
-import pool from '../database/connection';
-import { RowDataPacket } from 'mysql2';
-
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
+import prisma from '../lib/prisma';
 
 const SCREENSHOTS_DIR = path.resolve(__dirname, '../../uploads/email-screenshots');
 const VIEWPORT_WIDTH = 800;
-const MAX_HEIGHT = 4000; // cap so we don't generate huge images
+const MAX_HEIGHT = 4000;
 
-// Ensure directory exists
 if (!fs.existsSync(SCREENSHOTS_DIR)) {
   fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 }
-
-// ---------------------------------------------------------------------------
-// Shared browser instance (lazy)
-// ---------------------------------------------------------------------------
 
 let browserPromise: Promise<Browser> | null = null;
 
@@ -34,7 +24,6 @@ function getBrowser(): Promise<Browser> {
         '--disable-gpu',
       ],
     });
-    // Reset promise if browser closes/crashes
     browserPromise.then((b) => {
       b.on('disconnected', () => {
         browserPromise = null;
@@ -44,28 +33,19 @@ function getBrowser(): Promise<Browser> {
   return browserPromise;
 }
 
-// ---------------------------------------------------------------------------
-// Take screenshot of email HTML
-// ---------------------------------------------------------------------------
-
 export async function screenshotEmail(emailId: number): Promise<string | null> {
   try {
-    // Fetch email HTML
-    const [rows] = await pool.query<RowDataPacket[]>(
-      'SELECT body_html, body_text, screenshot_url FROM emails WHERE id = ?',
-      [emailId],
-    );
-    if (!Array.isArray(rows) || rows.length === 0) return null;
+    const email = await prisma.emails.findUnique({
+      where: { id: emailId },
+      select: { body_html: true, body_text: true, screenshot_url: true },
+    });
+    if (!email) return null;
 
-    const email = rows[0] as { body_html?: string; body_text?: string; screenshot_url?: string };
-
-    // Skip if already has screenshot
     if (email.screenshot_url) return email.screenshot_url;
 
     const htmlContent = email.body_html || email.body_text;
     if (!htmlContent || htmlContent.trim().length < 10) return null;
 
-    // Wrap in basic HTML with UTF-8 + styling
     const fullHtml = `
       <!DOCTYPE html>
       <html>
@@ -101,14 +81,11 @@ export async function screenshotEmail(emailId: number): Promise<string | null> {
       await page.setViewport({ width: VIEWPORT_WIDTH, height: 600 });
       await page.setContent(fullHtml, { waitUntil: 'networkidle0', timeout: 15000 });
 
-      // Wait a bit for images to load
       await new Promise((r) => setTimeout(r, 500));
 
-      // Get actual body height (use string expression to avoid TS "document" error in Node context)
       const bodyHeight = await page.evaluate('document.body.scrollHeight') as number;
       const height = Math.min(bodyHeight, MAX_HEIGHT);
 
-      // Take screenshot
       const filename = `email_${emailId}_${Date.now()}.png`;
       const filepath = path.join(SCREENSHOTS_DIR, filename);
 
@@ -118,12 +95,11 @@ export async function screenshotEmail(emailId: number): Promise<string | null> {
         type: 'png',
       });
 
-      // Store relative URL in DB
       const screenshotUrl = `/api/uploads/email-screenshots/${filename}`;
-      await pool.query(
-        'UPDATE emails SET screenshot_url = ? WHERE id = ?',
-        [screenshotUrl, emailId],
-      );
+      await prisma.emails.update({
+        where: { id: emailId },
+        data: { screenshot_url: screenshotUrl },
+      });
 
       console.log(`[EmailScreenshot] Saved screenshot for email #${emailId}`);
       return screenshotUrl;
@@ -135,10 +111,6 @@ export async function screenshotEmail(emailId: number): Promise<string | null> {
     return null;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Batch: screenshot multiple emails by IDs
-// ---------------------------------------------------------------------------
 
 export async function screenshotEmailsByIds(ids: number[]): Promise<number> {
   if (ids.length === 0) return 0;
@@ -154,10 +126,6 @@ export async function screenshotEmailsByIds(ids: number[]): Promise<number> {
   }
   return done;
 }
-
-// ---------------------------------------------------------------------------
-// Cleanup: close browser on process exit
-// ---------------------------------------------------------------------------
 
 process.on('beforeExit', async () => {
   if (browserPromise) {

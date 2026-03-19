@@ -18,15 +18,4 @@ const pool = mysql.createPool({
   timezone: '+00:00', // UTC — matches process.env.TZ
 });
 
-export const connectDatabase = async (): Promise<void> => {
-  try {
-    const connection = await pool.getConnection();
-    console.log('Database connected successfully');
-    connection.release();
-  } catch (error) {
-    console.error('Database connection error:', error);
-    throw error;
-  }
-};
-
 export default pool;

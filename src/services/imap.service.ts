@@ -1,7 +1,7 @@
 import Imap from 'imap';
 import { simpleParser } from 'mailparser';
 import dotenv from 'dotenv';
-import pool from '../database/connection';
+import prisma from '../lib/prisma';
 
 dotenv.config();
 
@@ -324,7 +324,6 @@ export class ImapService {
   // -------------------------------------------------------------------------
 
   async syncEmailsToDatabase(): Promise<{ synced: number; newIds: number[] }> {
-    let connection;
     try {
       console.log('Starting email sync…');
       const emails = await this.fetchEmails(100);
@@ -335,13 +334,12 @@ export class ImapService {
         return { synced: 0, newIds: [] };
       }
 
-      connection = await pool.getConnection();
       let syncedCount = 0;
       let skippedCount = 0;
       let errorCount = 0;
       const newIds: number[] = [];
 
-      const MAX_TEXT_LENGTH = 16 * 1024 * 1024; // 16 MB
+      const MAX_TEXT_LENGTH = 16 * 1024 * 1024;
 
       for (const email of emails) {
         try {
@@ -350,32 +348,29 @@ export class ImapService {
             continue;
           }
 
-          const [existing] = await connection.query(
-            'SELECT id FROM emails WHERE message_id = ?',
-            [email.messageId],
-          );
+          const existing = await prisma.emails.findFirst({
+            where: { message_id: email.messageId },
+            select: { id: true },
+          });
 
-          if (Array.isArray(existing) && existing.length === 0) {
+          if (!existing) {
             const bodyText = (email.text || '').slice(0, MAX_TEXT_LENGTH);
             const bodyHtml = (email.html || '').slice(0, MAX_TEXT_LENGTH);
 
-            const [result] = await connection.query(
-              `INSERT INTO emails
-               (message_id, subject, from_email, from_name, to_email, body_text, body_html, date_received)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-              [
-                email.messageId,
-                email.subject || '',
-                email.from.email || '',
-                email.from.name || '',
-                email.to || '',
-                bodyText,
-                bodyHtml,
-                email.date || new Date(),
-              ],
-            );
-            const insertId = (result as any).insertId;
-            if (insertId) newIds.push(insertId);
+            const created = await prisma.emails.create({
+              data: {
+                message_id: email.messageId,
+                subject: email.subject || '',
+                from_email: email.from.email || '',
+                from_name: email.from.name || '',
+                to_email: email.to || '',
+                body_text: bodyText,
+                body_html: bodyHtml,
+                date_received: email.date || new Date(),
+              },
+              select: { id: true },
+            });
+            newIds.push(created.id);
             syncedCount++;
           } else {
             skippedCount++;
@@ -386,14 +381,12 @@ export class ImapService {
         }
       }
 
-      connection.release();
       console.log(
         `Email sync completed: ${syncedCount} synced, ${skippedCount} skipped, ${errorCount} errors`,
       );
       return { synced: syncedCount, newIds };
     } catch (error: any) {
       console.error('Error syncing emails to database:', error?.message || error);
-      if (connection) connection.release();
       throw error;
     }
   }

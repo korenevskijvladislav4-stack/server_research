@@ -10,6 +10,10 @@ router.post('/chat/sessions', authenticate, asyncHandler(ctrl.createChat));
 router.get('/chat/sessions/:sessionId', authenticate, asyncHandler(ctrl.getChat));
 router.delete('/chat/sessions/:sessionId', authenticate, asyncHandler(ctrl.deleteChat));
 router.post('/chat/sessions/:sessionId/messages', authenticate, asyncHandler(ctrl.sendMessage));
-router.post('/chat/sessions/:sessionId/messages/stream', authenticate, ctrl.sendMessageStream);
+router.post(
+  '/chat/sessions/:sessionId/messages/stream',
+  authenticate,
+  asyncHandler(ctrl.sendMessageStream),
+);
 
 export default router;

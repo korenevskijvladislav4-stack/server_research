@@ -7,6 +7,7 @@ import {
   buildXOAuth2Token,
 } from '../../services/gmail-oauth.service';
 import type { ConnectionType } from '../../models/ImapAccount';
+import { AppError } from '../../errors/AppError';
 import { summarizeEmailsByIds, assignEmailTopicsByIds } from '../../services/ai-summary.service';
 import { screenshotEmailsByIds } from '../../services/email-screenshot.service';
 import { emailService } from './email.service';
@@ -18,18 +19,26 @@ function sanitizeBigInt<T>(value: T): T {
   );
 }
 
-const formatSyncError = (error: any): string => {
-  const msg = error?.message ?? '';
+const formatSyncError = (error: unknown): string => {
+  const msg = error instanceof Error ? error.message : '';
   if (msg.includes('Application-specific password') || msg.includes('185833')) {
     return 'Для Gmail нужен пароль приложения, а не обычный пароль. Включите 2FA и создайте пароль приложения: https://support.google.com/accounts/answer/185833';
   }
-  if (msg.includes('timeout') || error?.source === 'timeout-auth') {
+  const source =
+    typeof error === 'object' && error !== null && 'source' in error
+      ? (error as { source: unknown }).source
+      : undefined;
+  if (msg.includes('timeout') || source === 'timeout-auth') {
     return 'IMAP authentication timeout. Check host, port, credentials and firewall.';
   }
-  if (error?.code === 'ECONNREFUSED') {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? (error as { code: unknown }).code
+      : undefined;
+  if (code === 'ECONNREFUSED') {
     return 'Cannot connect to IMAP server. Check host, port and network.';
   }
-  if (error?.code === 'EAUTH' || msg.includes('authentication')) {
+  if (code === 'EAUTH' || msg.includes('authentication')) {
     return 'IMAP authentication failed. Check credentials and IMAP access.';
   }
   return msg || 'Sync failed';
@@ -73,74 +82,41 @@ async function buildImapServiceForAccount(row: {
 }
 
 export const getEmailRecipients = async (_req: Request, res: Response): Promise<void> => {
-  try {
-    const recipients = await emailService.getEmailRecipients();
-    res.json(recipients);
-  } catch (error) {
-    console.error('Error fetching email recipients:', error);
-    res.status(500).json({ error: (error as any)?.message || 'Failed to fetch recipients' });
-  }
+  const recipients = await emailService.getEmailRecipients();
+  res.json(recipients);
 };
 
 export const getEmailAnalytics = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { date_from, date_to, to_email, geo, topic_id } = req.query;
-    const result = await emailService.getEmailAnalytics({
-      date_from: date_from ? String(date_from) : undefined,
-      date_to: date_to ? String(date_to) : undefined,
-      to_email: to_email ? String(to_email) : undefined,
-      geo: geo ? String(geo) : undefined,
-      topic_id: topic_id ? Number(topic_id) : undefined,
-    });
-    res.json(result);
-  } catch (error) {
-    console.error('Error fetching email analytics:', error);
-    res.status(500).json({ error: (error as any)?.message || 'Failed to fetch email analytics' });
-  }
+  const { date_from, date_to, to_email, geo, topic_id } = req.query;
+  const result = await emailService.getEmailAnalytics({
+    date_from: date_from ? String(date_from) : undefined,
+    date_to: date_to ? String(date_to) : undefined,
+    to_email: to_email ? String(to_email) : undefined,
+    geo: geo ? String(geo) : undefined,
+    topic_id: topic_id ? Number(topic_id) : undefined,
+  });
+  res.json(result);
 };
 
 export const getAllEmails = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const {
-      limit = 50,
-      offset = 0,
-      is_read,
-      related_casino_id,
-      to_email,
-      date_from,
-      date_to,
-      geo,
-      topic_id,
-    } = req.query;
+  const {
+    limit = 50,
+    offset = 0,
+    is_read,
+    related_casino_id,
+    to_email,
+    date_from,
+    date_to,
+    geo,
+    topic_id,
+  } = req.query;
 
-    const lim = parseInt(limit as string, 10);
-    const off = parseInt(offset as string, 10);
+  const lim = parseInt(limit as string, 10);
+  const off = parseInt(offset as string, 10);
 
-    if (related_casino_id) {
-      const result = await emailService.getAllEmailsByCasinoNameMatch({
-        casinoId: Number(related_casino_id),
-        limit: lim,
-        offset: off,
-        is_read: is_read ? String(is_read) : undefined,
-        to_email: to_email ? String(to_email) : undefined,
-        date_from: date_from ? String(date_from) : undefined,
-        date_to: date_to ? String(date_to) : undefined,
-        geo: geo ? String(geo) : undefined,
-      });
-      if (result.notFound) {
-        res.status(404).json({ error: 'Casino not found' });
-        return;
-      }
-      res.json({
-        data: result.data,
-        total: result.total,
-        limit: result.limit,
-        offset: result.offset,
-      });
-      return;
-    }
-
-    const result = await emailService.getAllEmailsStandard({
+  if (related_casino_id) {
+    const result = await emailService.getAllEmailsByCasinoNameMatch({
+      casinoId: Number(related_casino_id),
       limit: lim,
       offset: off,
       is_read: is_read ? String(is_read) : undefined,
@@ -148,66 +124,71 @@ export const getAllEmails = async (req: Request, res: Response): Promise<void> =
       date_from: date_from ? String(date_from) : undefined,
       date_to: date_to ? String(date_to) : undefined,
       geo: geo ? String(geo) : undefined,
-      topic_id: topic_id ? Number(topic_id) : undefined,
     });
-
-    res.json(sanitizeBigInt(result));
-  } catch (error) {
-    console.error('Error fetching emails:', error);
-    res.status(500).json({ error: (error as any)?.message || 'Failed to fetch emails' });
+    if (result.notFound) {
+      throw new AppError(404, 'Казино не найдено');
+    }
+    res.json({
+      data: result.data,
+      total: result.total,
+      limit: result.limit,
+      offset: result.offset,
+    });
+    return;
   }
+
+  const result = await emailService.getAllEmailsStandard({
+    limit: lim,
+    offset: off,
+    is_read: is_read ? String(is_read) : undefined,
+    to_email: to_email ? String(to_email) : undefined,
+    date_from: date_from ? String(date_from) : undefined,
+    date_to: date_to ? String(date_to) : undefined,
+    geo: geo ? String(geo) : undefined,
+    topic_id: topic_id ? Number(topic_id) : undefined,
+  });
+
+  res.json(sanitizeBigInt(result));
 };
 
 export const getEmailsByCasinoNameMatch = async (
   req: Request,
   res: Response,
 ): Promise<void> => {
-  try {
-    const { casinoId } = req.params;
-    const { limit = 50, offset = 0, to_email } = req.query;
+  const { casinoId } = req.params;
+  const { limit = 50, offset = 0, to_email } = req.query;
 
-    const lim = parseInt(limit as string, 10);
-    const off = parseInt(offset as string, 10);
+  const lim = parseInt(limit as string, 10);
+  const off = parseInt(offset as string, 10);
 
-    const result = await emailService.getEmailsByCasinoNameMatchSimple({
-      casinoId: Number(casinoId),
-      limit: lim,
-      offset: off,
-      to_email: to_email ? String(to_email) : undefined,
-    });
+  const result = await emailService.getEmailsByCasinoNameMatchSimple({
+    casinoId: Number(casinoId),
+    limit: lim,
+    offset: off,
+    to_email: to_email ? String(to_email) : undefined,
+  });
 
-    if (result.notFound) {
-      res.status(404).json({ error: 'Casino not found' });
-      return;
-    }
-
-    res.json(
-      sanitizeBigInt({
-        data: result.data,
-        total: result.total,
-        limit: result.limit,
-        offset: result.offset,
-      }),
-    );
-  } catch (error) {
-    console.error('getEmailsByCasinoNameMatch error:', error);
-    res.status(500).json({ error: (error as any)?.message || 'Failed to fetch emails for casino' });
+  if (result.notFound) {
+    throw new AppError(404, 'Казино не найдено');
   }
+
+  res.json(
+    sanitizeBigInt({
+      data: result.data,
+      total: result.total,
+      limit: result.limit,
+      offset: result.offset,
+    }),
+  );
 };
 
 export const getEmailById = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params;
-    const row = await emailService.getEmailById(id);
-    if (!row) {
-      res.status(404).json({ error: 'Email not found' });
-      return;
-    }
-    res.json(row);
-  } catch (error) {
-    console.error('Error fetching email:', error);
-    res.status(500).json({ error: (error as any)?.message || 'Failed to fetch email' });
+  const { id } = req.params;
+  const row = await emailService.getEmailById(id);
+  if (!row) {
+    throw new AppError(404, 'Письмо не найдено');
   }
+  res.json(row);
 };
 
 export const syncEmails = async (req: Request, res: Response): Promise<void> => {
@@ -248,10 +229,7 @@ export const syncEmails = async (req: Request, res: Response): Promise<void> => 
         });
         return;
       }
-      res.status(400).json({
-        error: 'Нет настроенных аккаунтов. Добавьте аккаунт в «Почта → Настройки».',
-      });
-      return;
+      throw new AppError(400, 'Нет настроенных аккаунтов. Добавьте аккаунт в «Почта → Настройки».');
     }
 
     const results: {
@@ -263,7 +241,7 @@ export const syncEmails = async (req: Request, res: Response): Promise<void> => 
     let totalSynced = 0;
     const allNewIds: number[] = [];
 
-    for (const acc of accounts as any[]) {
+    for (const acc of accounts) {
       let imapSvc: ImapService | null = null;
       try {
         imapSvc = await buildImapServiceForAccount(acc);
@@ -272,7 +250,7 @@ export const syncEmails = async (req: Request, res: Response): Promise<void> => 
         totalSynced += synced;
         allNewIds.push(...newIds);
         results.push({ accountId: acc.id, name: acc.name, synced });
-      } catch (err: any) {
+      } catch (err: unknown) {
         results.push({
           accountId: acc.id,
           name: acc.name,
@@ -318,9 +296,6 @@ export const syncEmails = async (req: Request, res: Response): Promise<void> => 
       linkedCount,
       results,
     });
-  } catch (error: any) {
-    console.error('Error syncing emails:', error);
-    res.status(500).json({ error: formatSyncError(error) });
   } finally {
     for (const svc of services) {
       try {
@@ -333,180 +308,147 @@ export const syncEmails = async (req: Request, res: Response): Promise<void> => 
 };
 
 export const relinkEmails = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const resetAll = req.query.reset === 'true';
-    const { linked } = await emailService.autoLinkEmailsToCasinos(resetAll);
-    res.json({
-      message: resetAll
-        ? `Перепривязано ${linked} писем к казино`
-        : `Привязано ${linked} писем к казино`,
-      linked,
-      reset: resetAll,
-    });
-  } catch (error) {
-    console.error('Error relinking emails:', error);
-    res.status(500).json({ error: (error as any)?.message || 'Failed to relink emails' });
-  }
+  const resetAll = req.query.reset === 'true';
+  const { linked } = await emailService.autoLinkEmailsToCasinos(resetAll);
+  res.json({
+    message: resetAll
+      ? `Перепривязано ${linked} писем к казино`
+      : `Привязано ${linked} писем к казино`,
+    linked,
+    reset: resetAll,
+  });
 };
 
 export const markEmailAsRead = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params;
-    const updated = await emailService.markEmailAsRead(id);
-    res.json(updated);
-  } catch (error) {
-    console.error('Error marking email as read:', error);
-    res.status(500).json({ error: (error as any)?.message || 'Failed to mark email as read' });
-  }
+  const { id } = req.params;
+  const updated = await emailService.markEmailAsRead(id);
+  res.json(updated);
 };
 
 export const linkEmailToCasino = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params;
-    const { casino_id } = req.body;
-    const updated = await emailService.linkEmailToCasino(id, Number(casino_id));
-    res.json(updated);
-  } catch (error) {
-    console.error('Error linking email to casino:', error);
-    res.status(500).json({ error: (error as any)?.message || 'Failed to link email to casino' });
-  }
+  const { id } = req.params;
+  const { casino_id } = req.body;
+  const updated = await emailService.linkEmailToCasino(id, Number(casino_id));
+  res.json(updated);
 };
 
 export const requestSummary = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params;
+  const { id } = req.params;
 
-    await emailService.clearSummaryAndTopic(Number(id));
+  await emailService.clearSummaryAndTopic(Number(id));
 
-    const { summarizeEmail, assignEmailTopic } = await import(
-      '../../services/ai-summary.service'
-    );
-    const summary = await summarizeEmail(Number(id));
-    await assignEmailTopic(Number(id));
+  const { summarizeEmail, assignEmailTopic } = await import(
+    '../../services/ai-summary.service'
+  );
+  const summary = await summarizeEmail(Number(id));
+  await assignEmailTopic(Number(id));
 
-    if (!summary) {
-      res.status(500).json({ error: 'Не удалось получить саммари' });
-      return;
-    }
-
-    const row = await emailService.getEmailById(id);
-    res.json(row);
-  } catch (error) {
-    console.error('Error requesting summary:', error);
-    res.status(500).json({ error: (error as any)?.message || 'Failed to generate summary' });
+  if (!summary) {
+    throw new AppError(500, 'Не удалось получить саммари');
   }
+
+  const row = await emailService.getEmailById(id);
+  res.json(row);
 };
 
 export const requestScreenshot = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params;
+  const { id } = req.params;
 
-    await emailService.clearScreenshot(Number(id));
+  await emailService.clearScreenshot(Number(id));
 
-    const { screenshotEmail } = await import('../../services/email-screenshot.service');
-    const url = await screenshotEmail(Number(id));
+  const { screenshotEmail } = await import('../../services/email-screenshot.service');
+  const url = await screenshotEmail(Number(id));
 
-    if (!url) {
-      res.status(500).json({ error: 'Не удалось сделать скриншот' });
-      return;
-    }
-
-    const row = await emailService.getEmailById(id);
-    res.json(row);
-  } catch (error) {
-    console.error('Error requesting screenshot:', error);
-    res.status(500).json({ error: (error as any)?.message || 'Failed to generate screenshot' });
+  if (!url) {
+    throw new AppError(500, 'Не удалось сделать скриншот');
   }
+
+  const row = await emailService.getEmailById(id);
+  res.json(row);
 };
 
 export const exportEmailsXlsx = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { related_casino_id, to_email, geo, date_from, date_to, is_read, topic_id } = req.query;
+  const { related_casino_id, to_email, geo, date_from, date_to, is_read, topic_id } = req.query;
 
-    const proto = req.protocol;
-    const host = req.get('host') || 'localhost:5000';
-    const baseUrl = `${proto}://${host}`;
+  const proto = req.protocol;
+  const host = req.get('host') || 'localhost:5000';
+  const baseUrl = `${proto}://${host}`;
 
-    const emails = await emailService.exportEmails({
-      related_casino_id: related_casino_id ? String(related_casino_id) : undefined,
-      to_email: to_email ? String(to_email) : undefined,
-      geo: geo ? String(geo) : undefined,
-      date_from: date_from ? String(date_from) : undefined,
-      date_to: date_to ? String(date_to) : undefined,
-      is_read: is_read ? String(is_read) : undefined,
-      topic_id: topic_id ? Number(topic_id) : undefined,
+  const emails = await emailService.exportEmails({
+    related_casino_id: related_casino_id ? String(related_casino_id) : undefined,
+    to_email: to_email ? String(to_email) : undefined,
+    geo: geo ? String(geo) : undefined,
+    date_from: date_from ? String(date_from) : undefined,
+    date_to: date_to ? String(date_to) : undefined,
+    is_read: is_read ? String(is_read) : undefined,
+    topic_id: topic_id ? Number(topic_id) : undefined,
+  });
+
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Письма');
+
+  sheet.columns = [
+    { header: 'Проект', key: 'project', width: 25 },
+    { header: 'GEO', key: 'geo', width: 8 },
+    { header: 'Отправитель', key: 'sender', width: 35 },
+    { header: 'Получатель', key: 'recipient', width: 30 },
+    { header: 'Дата', key: 'date', width: 18 },
+    { header: 'Тематика', key: 'topic', width: 25 },
+    { header: 'Саммари', key: 'summary', width: 60 },
+    { header: 'Скриншот', key: 'screenshot', width: 50 },
+  ];
+
+  const headerRow = sheet.getRow(1);
+  headerRow.font = { bold: true };
+  headerRow.fill = {
+    type: 'pattern',
+    pattern: 'solid',
+    fgColor: { argb: 'FF4472C4' },
+  };
+  headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+
+  for (const email of emails) {
+    const senderDisplay = email.from_name
+      ? `${email.from_name} <${email.from_email}>`
+      : email.from_email || '';
+
+    const screenshotLink = email.screenshot_url
+      ? `${baseUrl}${email.screenshot_url}`
+      : '';
+
+    const dateStr = email.date_received
+      ? new Date(email.date_received).toISOString().slice(0, 16).replace('T', ' ')
+      : '';
+
+    sheet.addRow({
+      project: email.casino_name || '',
+      geo: email.geo || '',
+      sender: senderDisplay,
+      recipient: email.to_email || '',
+      date: dateStr,
+      topic: email.topic_name || '',
+      summary: email.ai_summary || '',
+      screenshot: screenshotLink,
     });
-
-    const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet('Письма');
-
-    sheet.columns = [
-      { header: 'Проект', key: 'project', width: 25 },
-      { header: 'GEO', key: 'geo', width: 8 },
-      { header: 'Отправитель', key: 'sender', width: 35 },
-      { header: 'Получатель', key: 'recipient', width: 30 },
-      { header: 'Дата', key: 'date', width: 18 },
-      { header: 'Тематика', key: 'topic', width: 25 },
-      { header: 'Саммари', key: 'summary', width: 60 },
-      { header: 'Скриншот', key: 'screenshot', width: 50 },
-    ];
-
-    const headerRow = sheet.getRow(1);
-    headerRow.font = { bold: true };
-    headerRow.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FF4472C4' },
-    };
-    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-
-    for (const email of emails) {
-      const senderDisplay = email.from_name
-        ? `${email.from_name} <${email.from_email}>`
-        : email.from_email || '';
-
-      const screenshotLink = email.screenshot_url
-        ? `${baseUrl}${email.screenshot_url}`
-        : '';
-
-      const dateStr = email.date_received
-        ? new Date(email.date_received).toISOString().slice(0, 16).replace('T', ' ')
-        : '';
-
-      sheet.addRow({
-        project: email.casino_name || '',
-        geo: email.geo || '',
-        sender: senderDisplay,
-        recipient: email.to_email || '',
-        date: dateStr,
-        topic: email.topic_name || '',
-        summary: email.ai_summary || '',
-        screenshot: screenshotLink,
-      });
-    }
-
-    sheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return;
-      const cell = row.getCell('screenshot');
-      const url = cell.value as string;
-      if (url && url.startsWith('http')) {
-        cell.value = { text: 'Открыть', hyperlink: url };
-        cell.font = { color: { argb: 'FF0563C1' }, underline: true };
-      }
-    });
-
-    const filename = `emails_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    );
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-
-    await workbook.xlsx.write(res);
-    res.end();
-  } catch (error) {
-    console.error('Error exporting emails:', error);
-    res.status(500).json({ error: (error as any)?.message || 'Failed to export emails' });
   }
-};
 
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    const cell = row.getCell('screenshot');
+    const url = cell.value as string;
+    if (url && url.startsWith('http')) {
+      cell.value = { text: 'Открыть', hyperlink: url };
+      cell.font = { color: { argb: 'FF0563C1' }, underline: true };
+    }
+  });
+
+  const filename = `emails_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  );
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+  await workbook.xlsx.write(res);
+  res.end();
+};

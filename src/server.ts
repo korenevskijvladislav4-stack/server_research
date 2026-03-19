@@ -5,8 +5,8 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { loadConfig, getConfig } from './config/env';
-import { connectDatabase } from './database/connection';
 import { errorHandler } from './middleware/errorHandler';
+import { logger } from './utils/logger';
 import casinoRoutes from './routes/casino.routes';
 import emailRoutes from './routes/email.routes';
 import authRoutes from './routes/auth.routes';
@@ -50,7 +50,7 @@ function getAllowedOrigins(): string[] {
 }
 const allowedOrigins = getAllowedOrigins();
 
-console.log('Allowed CORS origins:', allowedOrigins);
+logger.info({ origins: allowedOrigins }, 'Allowed CORS origins');
 
 // Функция для нормализации origin (убирает путь, оставляет только протокол + домен)
 const normalizeOrigin = (origin: string): string => {
@@ -83,8 +83,7 @@ app.use(cors({
       callback(null, normalizedOrigin);
     } else {
       // Логируем для отладки
-      console.log('CORS blocked origin:', origin, '(normalized:', normalizedOrigin, ')');
-      console.log('Allowed origins:', allowedOrigins);
+      logger.warn({ origin, normalizedOrigin, allowedOrigins }, 'CORS blocked origin');
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -120,8 +119,7 @@ app.use(express.urlencoded({ extended: true }));
 // In production: __dirname = server/dist, so ../uploads = server/uploads
 const serverRoot = path.resolve(__dirname, '..');
 const uploadsPath = path.join(serverRoot, 'uploads');
-console.log('Static uploads path:', uploadsPath);
-console.log('Server __dirname:', __dirname);
+logger.info({ uploadsPath }, 'Static uploads path');
 app.use('/api/uploads', express.static(uploadsPath, {
   setHeaders: (res, _filePath) => {
     // Allow CORS for images
@@ -129,31 +127,30 @@ app.use('/api/uploads', express.static(uploadsPath, {
   }
 }));
 
-// Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/casinos', casinoRoutes);
+// Routes — all API endpoints under /api/v1
+const V1 = '/api/v1';
 
-app.use('/api/emails', emailRoutes);
-app.use('/api', casinoProfileRoutes);
-app.use('/api', casinoBonusRoutes);
-app.use('/api', casinoPaymentRoutes);
-app.use('/api', geoRoutes);
-app.use('/api', casinoCommentRoutes);
-app.use('/api', referenceRoutes);
-app.use('/api/profile-fields', profileFieldRoutes);
-app.use('/api/profile-contexts', profileContextRoutes);
-app.use('/api/profile-settings', profileSettingRoutes);
-app.use('/api', casinoAccountRoutes);
-app.use('/api', selectorsRoutes);
-app.use('/api/imap-accounts', imapAccountRoutes);
+app.use(`${V1}/auth`, authRoutes);
+app.use(`${V1}/casinos`, casinoRoutes);
+app.use(`${V1}/emails`, emailRoutes);
+app.use(V1, casinoProfileRoutes);
+app.use(V1, casinoBonusRoutes);
+app.use(V1, casinoPaymentRoutes);
+app.use(V1, geoRoutes);
+app.use(V1, casinoCommentRoutes);
+app.use(V1, referenceRoutes);
+app.use(`${V1}/profile-fields`, profileFieldRoutes);
+app.use(`${V1}/profile-contexts`, profileContextRoutes);
+app.use(`${V1}/profile-settings`, profileSettingRoutes);
+app.use(V1, casinoAccountRoutes);
+app.use(V1, selectorsRoutes);
+app.use(`${V1}/imap-accounts`, imapAccountRoutes);
+app.use(V1, tagRoutes);
+app.use(V1, casinoPromoRoutes);
+app.use(V1, casinoProviderRoutes);
+app.use(V1, chatRoutes);
 
-app.use('/api', tagRoutes);
-app.use('/api', casinoPromoRoutes);
-app.use('/api', casinoProviderRoutes);
-app.use('/api', chatRoutes);
-
-// Health check (with DB probe; 503 if DB unavailable)
-app.get('/api/health', asyncHandler(healthCheck));
+app.get(`${V1}/health`, asyncHandler(healthCheck));
 
 // OpenAPI docs (optional: restrict to dev with getConfig().nodeEnv === 'development')
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(getSwaggerSpec(), { customSiteTitle: 'Research CRM API' }));
@@ -177,17 +174,15 @@ app.use(errorHandler);
 // Start server
 const startServer = async () => {
   try {
-    await connectDatabase();
     await prisma.$connect();
+    logger.info('Database connected successfully');
     const config = getConfig();
     app.listen(config.port, () => {
-      console.log(`Server is running on port ${config.port}`);
-
-      // Start background email sync (polls every 2 minutes)
+      logger.info({ port: config.port }, 'Server is running');
       startEmailSyncScheduler();
     });
   } catch (error) {
-    console.error('Failed to start server:', error);
+    logger.fatal(error, 'Failed to start server');
     process.exit(1);
   }
 };

@@ -9,96 +9,66 @@ import {
   buildXOAuth2Token,
 } from '../../services/gmail-oauth.service';
 import type { ConnectionType } from '../../models/ImapAccount';
+import { AppError } from '../../errors/AppError';
 import { imapAccountService } from './imapAccount.service';
 
-const SAFE_ERROR = 'Failed to list IMAP accounts';
-
 export const listImapAccounts = async (_req: Request, res: Response): Promise<void> => {
-  try {
-    const rows = await imapAccountService.list();
-    res.json(rows);
-  } catch (error) {
-    console.error('Error listing IMAP accounts:', error);
-    res.status(500).json({ error: SAFE_ERROR });
-  }
+  const rows = await imapAccountService.list();
+  res.json(rows);
 };
 
 export const getImapAccountById = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params;
-    const row = await imapAccountService.getById(Number(id));
-    if (!row) {
-      res.status(404).json({ error: 'IMAP account not found' });
-      return;
-    }
-    res.json(row);
-  } catch (error) {
-    console.error('Error getting IMAP account:', error);
-    res.status(500).json({ error: 'Failed to get IMAP account' });
+  const { id } = req.params;
+  const row = await imapAccountService.getById(Number(id));
+  if (!row) {
+    throw new AppError(404, 'IMAP-аккаунт не найден');
   }
+  res.json(row);
 };
 
 export const createImapAccount = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { name, host, port = 993, user, password, tls = true, is_active = true } = req.body;
-    if (!name || !host || !user || !password) {
-      res.status(400).json({ error: 'name, host, user and password are required' });
-      return;
-    }
-    const row = await imapAccountService.createImapAccount({
-      name,
-      host,
-      port: Number(port),
-      user,
-      password,
-      tls,
-      is_active,
-    });
-    res.status(201).json(row);
-  } catch (error) {
-    console.error('Error creating IMAP account:', error);
-    res.status(500).json({ error: 'Failed to create IMAP account' });
+  const { name, host, port = 993, user, password, tls = true, is_active = true } = req.body;
+  if (!name || !host || !user || !password) {
+    throw new AppError(400, 'Имя, хост, пользователь и пароль обязательны');
   }
+  const row = await imapAccountService.createImapAccount({
+    name,
+    host,
+    port: Number(port),
+    user,
+    password,
+    tls,
+    is_active,
+  });
+  res.status(201).json(row);
 };
 
 export const updateImapAccount = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params;
-    const { name, host, port, user, password, tls, is_active } = req.body;
+  const { id } = req.params;
+  const { name, host, port, user, password, tls, is_active } = req.body;
 
-    const row = await imapAccountService.updateImapAccount(Number(id), {
-      name,
-      host,
-      port: port != null ? Number(port) : undefined,
-      user,
-      password,
-      tls,
-      is_active,
-    });
-    if (!row) {
-      res.status(404).json({ error: 'IMAP account not found' });
-      return;
-    }
-    res.json(row);
-  } catch (error) {
-    console.error('Error updating IMAP account:', error);
-    res.status(500).json({ error: 'Failed to update IMAP account' });
+  const row = await imapAccountService.updateImapAccount(Number(id), {
+    name,
+    host,
+    port: port != null ? Number(port) : undefined,
+    user,
+    password,
+    tls,
+    is_active,
+  });
+  if (!row) {
+    throw new AppError(404, 'IMAP-аккаунт не найден');
   }
+  res.json(row);
 };
 
 export const deleteImapAccount = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params;
-    const ok = await imapAccountService.deleteImapAccount(Number(id));
-    if (!ok) {
-      res.status(404).json({ error: 'IMAP account not found' });
-      return;
-    }
-    res.json({ message: 'IMAP account deleted' });
-  } catch (error) {
-    console.error('Error deleting IMAP account:', error);
-    res.status(500).json({ error: 'Failed to delete IMAP account' });
+  const { id } = req.params;
+  const ok = await imapAccountService.deleteImapAccount(Number(id));
+  if (!ok) {
+    throw new AppError(404, 'IMAP-аккаунт не найден');
   }
+  res.json({ message: 'IMAP account deleted' });
 };
 
 export const testImapAccount = async (req: Request, res: Response): Promise<void> => {
@@ -107,8 +77,7 @@ export const testImapAccount = async (req: Request, res: Response): Promise<void
     const { id } = req.params;
     const row = await imapAccountService.getFullById(Number(id));
     if (!row) {
-      res.status(404).json({ error: 'IMAP account not found' });
-      return;
+      throw new AppError(404, 'IMAP-аккаунт не найден');
     }
 
     const connectionType: ConnectionType = (row.connection_type as ConnectionType) || 'imap';
@@ -140,6 +109,7 @@ export const testImapAccount = async (req: Request, res: Response): Promise<void
     imapService.disconnect();
     res.json({ success: true, message: 'Connection successful' });
   } catch (error: any) {
+    if (error instanceof AppError) throw error;
     const msg = error?.message ?? '';
     let errorText = msg || 'Connection failed';
     if (msg.includes('Application-specific password') || msg.includes('185833')) {
@@ -163,36 +133,24 @@ export const gmailOAuthStatus = async (_req: Request, res: Response): Promise<vo
 };
 
 export const gmailGetAuthUrl = async (_req: Request, res: Response): Promise<void> => {
-  try {
-    const url = getGmailAuthUrl();
-    res.json({ url });
-  } catch (error: any) {
-    console.error('Error generating Gmail auth URL:', error);
-    res.status(500).json({ error: error.message || 'Failed to generate auth URL' });
-  }
+  const url = getGmailAuthUrl();
+  res.json({ url });
 };
 
 export const gmailCallback = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { code, name } = req.body;
-    if (!code) {
-      res.status(400).json({ error: 'Authorization code is required' });
-      return;
-    }
-
-    const { email, refreshToken } = await exchangeCodeForTokens(code);
-
-    const displayName = name || `Gmail: ${email}`;
-    const row = await imapAccountService.createGmailOAuthAccount({
-      displayName,
-      email,
-      refreshToken,
-    });
-
-    res.status(201).json(row);
-  } catch (error: any) {
-    console.error('Gmail OAuth callback error:', error);
-    res.status(500).json({ error: error.message || 'Failed to complete Gmail OAuth' });
+  const { code, name } = req.body;
+  if (!code) {
+    throw new AppError(400, 'Код авторизации обязателен');
   }
-};
 
+  const { email, refreshToken } = await exchangeCodeForTokens(code);
+
+  const displayName = name || `Gmail: ${email}`;
+  const row = await imapAccountService.createGmailOAuthAccount({
+    displayName,
+    email,
+    refreshToken,
+  });
+
+  res.status(201).json(row);
+};

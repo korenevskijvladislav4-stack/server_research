@@ -1,5 +1,4 @@
-import { RowDataPacket } from 'mysql2';
-import pool from '../database/connection';
+import prisma from '../lib/prisma';
 import { ImapService } from './imap.service';
 import { decryptPassword } from '../common/utils/crypto.utils';
 import {
@@ -11,25 +10,25 @@ import { summarizeEmailsByIds, assignEmailTopicsByIds } from './ai-summary.servi
 import { screenshotEmailsByIds } from './email-screenshot.service';
 import type { ConnectionType } from '../models/ImapAccount';
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
-const SYNC_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
-const INITIAL_DELAY_MS = 15_000;          // 15 seconds after server start
+const SYNC_INTERVAL_MS = 2 * 60 * 1000;
+const INITIAL_DELAY_MS = 15_000;
 
 let intervalId: ReturnType<typeof setInterval> | null = null;
 let isSyncing = false;
 
-// ---------------------------------------------------------------------------
-// Build ImapService from account row
-// ---------------------------------------------------------------------------
-
-async function buildImapServiceForAccount(row: RowDataPacket): Promise<ImapService> {
-  const connectionType: ConnectionType = row.connection_type || 'imap';
+async function buildImapServiceForAccount(row: {
+  connection_type: string | null;
+  oauth_refresh_token_encrypted: string | null;
+  host: string;
+  port: number;
+  user: string;
+  password_encrypted: string;
+  tls: boolean;
+}): Promise<ImapService> {
+  const connectionType: ConnectionType = (row.connection_type as ConnectionType) || 'imap';
 
   if (connectionType === 'gmail_oauth') {
-    const refreshToken = decryptPassword(row.oauth_refresh_token_encrypted);
+    const refreshToken = decryptPassword(row.oauth_refresh_token_encrypted!);
     const accessToken = await refreshAccessToken(refreshToken);
     const xoauth2 = buildXOAuth2Token(row.user, accessToken);
 
@@ -52,10 +51,6 @@ async function buildImapServiceForAccount(row: RowDataPacket): Promise<ImapServi
   });
 }
 
-// ---------------------------------------------------------------------------
-// Core sync
-// ---------------------------------------------------------------------------
-
 async function runSync(): Promise<void> {
   if (isSyncing) {
     console.log('[EmailScheduler] Previous sync still running, skipping');
@@ -65,20 +60,25 @@ async function runSync(): Promise<void> {
   isSyncing = true;
 
   try {
-    const [rows] = await pool.query<RowDataPacket[]>(
-      `SELECT id, name, connection_type, host, port, user,
-              password_encrypted, oauth_refresh_token_encrypted, tls
-       FROM imap_accounts
-       WHERE is_active = 1
-       ORDER BY name`,
-    );
-
-    const accounts = Array.isArray(rows) ? rows : [];
+    const accounts = await prisma.imap_accounts.findMany({
+      where: { is_active: true },
+      orderBy: { name: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        connection_type: true,
+        host: true,
+        port: true,
+        user: true,
+        password_encrypted: true,
+        oauth_refresh_token_encrypted: true,
+        tls: true,
+      },
+    });
 
     const allNewIds: number[] = [];
 
     if (accounts.length === 0) {
-      // Try env-based fallback
       const envUser = process.env.IMAP_USER;
       const envPassword = process.env.IMAP_PASSWORD;
       if (envUser && envPassword) {
@@ -115,14 +115,12 @@ async function runSync(): Promise<void> {
       }
     }
 
-    // Auto-link new emails to casinos
     try {
       await emailService.autoLinkEmailsToCasinos(false);
     } catch (e) {
       console.error('[EmailScheduler] Auto-link error:', e);
     }
 
-    // AI-summarize, assign topic, and screenshot only the newly synced emails
     if (allNewIds.length > 0) {
       try {
         await summarizeEmailsByIds(allNewIds);
@@ -147,10 +145,6 @@ async function runSync(): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 export function startEmailSyncScheduler(): void {
   if (intervalId) {
     console.log('[EmailScheduler] Already running');
@@ -161,7 +155,6 @@ export function startEmailSyncScheduler(): void {
     `[EmailScheduler] Starting — first sync in ${INITIAL_DELAY_MS / 1000}s, then every ${SYNC_INTERVAL_MS / 1000}s`,
   );
 
-  // Delayed first run
   setTimeout(() => {
     runSync();
     intervalId = setInterval(runSync, SYNC_INTERVAL_MS);

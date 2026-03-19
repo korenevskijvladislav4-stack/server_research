@@ -1,24 +1,46 @@
 import { Request, Response, NextFunction } from 'express';
+import { Prisma } from '@prisma/client';
 import { isAppError } from '../errors/AppError';
 import { getConfig } from '../config/env';
 import { logger } from '../utils/logger';
+
+const PRISMA_ERROR_MAP: Record<string, { status: number; message: string }> = {
+  P2002: { status: 409, message: 'Запись с такими данными уже существует' },
+  P2025: { status: 404, message: 'Запись не найдена' },
+  P2003: { status: 400, message: 'Нарушена связь между записями' },
+  P2014: { status: 400, message: 'Невозможно удалить — есть связанные записи' },
+};
+
+function getPrismaFieldHint(err: Prisma.PrismaClientKnownRequestError): string | undefined {
+  if (err.code === 'P2002') {
+    const target = (err.meta?.target as string[]) ?? [];
+    if (target.length > 0) {
+      const fieldNames: Record<string, string> = {
+        email: 'email',
+        username: 'имя пользователя',
+        name: 'название',
+        code: 'код',
+      };
+      const readable = target.map((f) => fieldNames[f] || f).join(', ');
+      return `Поле «${readable}» уже занято`;
+    }
+  }
+  return undefined;
+}
 
 export const errorHandler = (
   err: Error,
   req: Request,
   res: Response,
-  _next: NextFunction
+  _next: NextFunction,
 ): void => {
   const config = getConfig();
   const isDev = config.nodeEnv === 'development';
 
-  logger.error('Error handler caught', err, { url: req.url, method: req.method, path: req.path });
-  if (isDev && err.stack) {
-    logger.error('Stack', undefined, { stack: err.stack });
-  }
+  logger.error({ err, url: req.url, method: req.method, path: req.path }, 'Unhandled error');
 
   if (res.headersSent) {
-    console.error('Response already sent, cannot send error response');
+    logger.warn('Response already sent, cannot send error response');
     return;
   }
 
@@ -36,9 +58,28 @@ export const errorHandler = (
     return;
   }
 
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    const mapped = PRISMA_ERROR_MAP[err.code];
+    if (mapped) {
+      const hint = getPrismaFieldHint(err);
+      res.status(mapped.status).json({
+        error: hint || mapped.message,
+        code: err.code,
+      });
+      return;
+    }
+  }
+
+  if (err instanceof Prisma.PrismaClientValidationError) {
+    res.status(400).json({
+      error: 'Некорректные данные запроса',
+      code: 'VALIDATION_ERROR',
+    });
+    return;
+  }
+
   res.status(500).json({
-    error: 'Internal Server Error',
-    message: isDev ? err.message : 'Something went wrong',
-    ...(isDev && err.stack && { stack: err.stack, path: req.path, method: req.method }),
+    error: 'Внутренняя ошибка сервера',
+    ...(isDev && { message: err.message, stack: err.stack, path: req.path, method: req.method }),
   });
 };
