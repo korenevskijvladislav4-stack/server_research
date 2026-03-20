@@ -3,7 +3,11 @@ import { authenticate } from '../../middleware/auth.middleware';
 import { asyncHandler } from '../../middleware/asyncHandler';
 import { validate } from '../../middleware/validate';
 import * as casinoProviderController from './casinoProvider.controller';
-import { addProviderToCasinoValidators } from '../../validators/casinoProvider.validators';
+import {
+  addProviderToCasinoValidators,
+  previewExtractProvidersValidators,
+  applyProviderNamesValidators,
+} from '../../validators/casinoProvider.validators';
 
 const router = Router();
 
@@ -41,6 +45,20 @@ router.post(
   '/casinos/:casinoId/providers/extract-ai',
   authenticate,
   asyncHandler(casinoProviderController.extractAndAddProviders),
+);
+
+router.post(
+  '/casinos/:casinoId/providers/extract-preview',
+  authenticate,
+  validate(previewExtractProvidersValidators),
+  asyncHandler(casinoProviderController.previewExtractProviders),
+);
+
+router.post(
+  '/casinos/:casinoId/providers/apply-names',
+  authenticate,
+  validate(applyProviderNamesValidators),
+  asyncHandler(casinoProviderController.applyProviderNames),
 );
 
 export default router;

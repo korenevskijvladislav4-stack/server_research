@@ -242,34 +242,47 @@ export const casinoProviderService = {
     return { casinos, providers, connections };
   },
 
-  async extractAndAddProviders(
+  async loadAllProviderNames(): Promise<string[]> {
+    const rows = await prisma.providers.findMany({
+      select: { name: true },
+      orderBy: { name: 'asc' },
+    });
+    return rows.map((p) => p.name);
+  },
+
+  /** Только ИИ: без записи в БД. */
+  async previewExtractProviderNames(text: string): Promise<{ names: string[] }> {
+    if (!text || typeof text !== 'string' || !String(text).trim()) {
+      return { names: [] };
+    }
+    const currentNames = await this.loadAllProviderNames();
+    const names = await extractProviderNamesFromText(text, currentNames);
+    return { names };
+  },
+
+  /**
+   * Привязка списка имён к казино (создание провайдеров и связей casino_providers).
+   * `seedCanonicalNames` — снимок справочника на момент извлечения (опционально, иначе читается из БД).
+   */
+  async linkProviderNamesToCasino(
     casinoId: number,
     geo: string,
-    text: string,
-    existingNames?: string[],
+    names: string[],
+    seedCanonicalNames?: string[],
   ): Promise<{ names: string[]; added: number }> {
     const geoTrim = (typeof geo === 'string' ? geo : '').trim();
-    if (!geoTrim || !text || typeof text !== 'string') {
+    if (!geoTrim || !casinoId) {
       return { names: [], added: 0 };
     }
 
-    const currentNames =
-      existingNames ??
-      (
-        await prisma.providers.findMany({
-          select: { name: true },
-          orderBy: { name: 'asc' },
-        })
-      ).map((p) => p.name);
-
-    const names = await extractProviderNamesFromText(text, currentNames);
-    if (!names.length) {
+    const cleaned = names.map((n) => String(n).trim()).filter(Boolean);
+    if (cleaned.length === 0) {
       return { names: [], added: 0 };
     }
+
+    const currentNames = seedCanonicalNames ?? (await this.loadAllProviderNames());
 
     let added = 0;
-
-    // Карта канонических имён по "ключу" (упрощённое написание)
     const canonicalByKey = new Map<string, string>();
     for (const n of currentNames) {
       const key = buildProviderKey(n);
@@ -278,7 +291,7 @@ export const casinoProviderService = {
       }
     }
 
-    for (const rawName of names) {
+    for (const rawName of cleaned) {
       const nameTrim = rawName.trim();
       if (!nameTrim) continue;
 
@@ -299,8 +312,6 @@ export const casinoProviderService = {
           data: { name: canonicalName },
         });
         providerId = created.id;
-        // Добавляем новый канон в карту, чтобы последующие имена с тем же ключом
-        // использовали его, а не создавали ещё один провайдер
         if (rawKey && !canonicalByKey.has(rawKey)) {
           canonicalByKey.set(rawKey, canonicalName);
         }
@@ -329,7 +340,27 @@ export const casinoProviderService = {
       }
     }
 
-    return { names, added };
+    return { names: cleaned, added };
+  },
+
+  async extractAndAddProviders(
+    casinoId: number,
+    geo: string,
+    text: string,
+    existingNames?: string[],
+  ): Promise<{ names: string[]; added: number }> {
+    const geoTrim = (typeof geo === 'string' ? geo : '').trim();
+    if (!geoTrim || !text || typeof text !== 'string') {
+      return { names: [], added: 0 };
+    }
+
+    const currentNames = existingNames ?? (await this.loadAllProviderNames());
+    const names = await extractProviderNamesFromText(text, currentNames);
+    if (!names.length) {
+      return { names: [], added: 0 };
+    }
+
+    return this.linkProviderNamesToCasino(casinoId, geoTrim, names, currentNames);
   },
 };
 

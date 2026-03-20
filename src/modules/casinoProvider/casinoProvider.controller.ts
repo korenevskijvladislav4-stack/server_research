@@ -83,6 +83,50 @@ export async function extractAndAddProviders(req: Request, res: Response): Promi
   res.json(result);
 }
 
+/** Только распознавание имён ИИ — без сохранения в БД. */
+export async function previewExtractProviders(req: Request, res: Response): Promise<void> {
+  const casinoId = Number(req.params.casinoId);
+  const { text } = req.body as { text: string };
+
+  if (!casinoId) {
+    throw new AppError(400, 'ID казино обязателен');
+  }
+  if (!text || typeof text !== 'string' || !text.trim()) {
+    throw new AppError(400, 'Текст обязателен');
+  }
+
+  const result = await casinoProviderService.previewExtractProviderNames(text);
+  res.json(result);
+}
+
+/** Сохранение отредактированного списка имён (после предпросмотра). */
+export async function applyProviderNames(req: Request, res: Response): Promise<void> {
+  const casinoId = Number(req.params.casinoId);
+  const { names, geo } = req.body as { names: unknown; geo: string };
+
+  if (!casinoId) {
+    throw new AppError(400, 'ID казино обязателен');
+  }
+  if (!geo || typeof geo !== 'string' || !geo.trim()) {
+    throw new AppError(400, 'GEO обязателен');
+  }
+  if (!Array.isArray(names)) {
+    throw new AppError(400, 'names должен быть массивом строк');
+  }
+
+  const nameList = names
+    .map((n) => (typeof n === 'string' ? n.trim() : ''))
+    .filter(Boolean);
+
+  if (nameList.length === 0) {
+    res.json({ names: [], added: 0, message: 'Пустой список' });
+    return;
+  }
+
+  const result = await casinoProviderService.linkProviderNamesToCasino(casinoId, geo, nameList);
+  res.json(result);
+}
+
 export async function getProviderAnalytics(req: Request, res: Response): Promise<void> {
   const geoRaw = req.query.geo;
   const casinoIdRaw = req.query.casino_id;
