@@ -5,15 +5,40 @@ import { getConfig } from '../config/env';
 import { logger } from '../utils/logger';
 
 const PRISMA_ERROR_MAP: Record<string, { status: number; message: string }> = {
+  P2000: { status: 400, message: 'Значение слишком длинное для поля в базе данных' },
   P2002: { status: 409, message: 'Запись с такими данными уже существует' },
   P2025: { status: 404, message: 'Запись не найдена' },
   P2003: { status: 400, message: 'Нарушена связь между записями' },
   P2014: { status: 400, message: 'Невозможно удалить — есть связанные записи' },
 };
 
+/** P2002 meta.target: массив полей или одно поле строкой (зависит от БД / драйвера Prisma). */
+function normalizePrismaUniqueTarget(meta: Prisma.PrismaClientKnownRequestError['meta']): string[] {
+  const raw = meta?.target;
+  if (raw == null) return [];
+  if (Array.isArray(raw)) return raw.map((x) => String(x));
+  return [String(raw)];
+}
+
 function getPrismaFieldHint(err: Prisma.PrismaClientKnownRequestError): string | undefined {
+  if (err.code === 'P2000') {
+    let col = err.meta?.column_name != null ? String(err.meta.column_name) : '';
+    if (!col && typeof err.message === 'string') {
+      const m = err.message.match(/Column:\s*(\w+)/i);
+      if (m) col = m[1];
+    }
+    if (col === 'code') {
+      return 'Код GEO не длиннее 10 символов (поле в базе ограничено, как и GEO в бонусах/платежах)';
+    }
+    if (col === 'name') {
+      return 'Название GEO не длиннее 100 символов';
+    }
+    if (col) {
+      return `Значение слишком длинное для поля «${col}»`;
+    }
+  }
   if (err.code === 'P2002') {
-    const target = (err.meta?.target as string[]) ?? [];
+    const target = normalizePrismaUniqueTarget(err.meta);
     if (target.length > 0) {
       const fieldNames: Record<string, string> = {
         email: 'email',

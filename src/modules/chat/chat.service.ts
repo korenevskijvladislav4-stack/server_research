@@ -1,5 +1,6 @@
 import prisma from '../../lib/prisma';
 import { buildFullKnowledgeContext } from './chat-knowledge.service';
+import { resolveChatModel } from './chatModel.service';
 import OpenAI from 'openai';
 
 let openaiClient: OpenAI | null = null;
@@ -13,6 +14,40 @@ function getOpenAI(): OpenAI | null {
     baseURL: process.env.OPENAI_BASE_URL || 'https://openrouter.ai/api/v1',
   });
   return openaiClient;
+}
+
+/** Извлечь дельту текста и рассуждений из чанка стрима (OpenRouter / расширения OpenAI). */
+function extractStreamDeltas(part: unknown): { content: string; reasoning: string } {
+  const p = part as {
+    choices?: Array<{
+      delta?: {
+        content?: string | null;
+        reasoning?: unknown;
+        reasoning_content?: unknown;
+      };
+    }>;
+  };
+  const delta = p?.choices?.[0]?.delta;
+  let content = '';
+  let reasoning = '';
+  if (delta?.content != null && String(delta.content)) {
+    content = String(delta.content);
+  }
+  const rawR = delta?.reasoning ?? delta?.reasoning_content;
+  if (typeof rawR === 'string' && rawR) {
+    reasoning = rawR;
+  } else if (Array.isArray(rawR)) {
+    reasoning = rawR
+      .map((x) => (typeof x === 'string' ? x : typeof x === 'object' && x && 'text' in x ? String((x as { text?: string }).text ?? '') : ''))
+      .join('');
+  } else if (rawR != null && typeof rawR === 'object') {
+    try {
+      reasoning = JSON.stringify(rawR);
+    } catch {
+      reasoning = String(rawR);
+    }
+  }
+  return { content, reasoning };
 }
 
 // Простой in-memory кэш полного контекста, чтобы не собирать его из БД на каждый запрос.
@@ -88,7 +123,14 @@ export const chatService = {
       include: {
         chat_messages: {
           orderBy: { created_at: 'asc' },
-          select: { id: true, role: true, content: true, created_at: true },
+          select: {
+            id: true,
+            role: true,
+            content: true,
+            reasoning: true,
+            model_id: true,
+            created_at: true,
+          },
         },
       },
     });
@@ -105,9 +147,17 @@ export const chatService = {
     sessionId: number,
     userId: number,
     userContent: string,
+    modelRequested?: string | null,
   ): Promise<{
     userMessage: { id: number; role: string; content: string; created_at: Date | null };
-    assistantMessage: { id: number; role: string; content: string; created_at: Date | null };
+    assistantMessage: {
+      id: number;
+      role: string;
+      content: string;
+      reasoning: string | null;
+      model_id: string | null;
+      created_at: Date | null;
+    };
   }> {
     const session = await db.chat_sessions.findFirst({
       where: { id: sessionId, user_id: userId },
@@ -125,8 +175,10 @@ export const chatService = {
       },
     });
 
+    const modelUsed = await resolveChatModel(modelRequested);
     const openai = getOpenAI();
     let assistantText = 'Не удалось получить ответ: сервис ИИ не настроен (OPENAI_API_KEY).';
+    let assistantReasoning: string | null = null;
     if (openai) {
       try {
         const history = session.chat_messages.slice(-12);
@@ -147,7 +199,7 @@ export const chatService = {
         ];
 
         const response = await openai.chat.completions.create({
-          model: process.env.OPENAI_MODEL || 'openai/gpt-4o-mini',
+          model: modelUsed,
           messages,
           // Максимально большой лимит токенов для длинных аналитических ответов.
           max_tokens: 7000,
@@ -157,6 +209,11 @@ export const chatService = {
         const choice = response.choices[0];
         const rawContent = choice?.message?.content ?? '';
         const trimmed = rawContent.trim();
+        const msgAny = choice?.message as { reasoning?: string; reasoning_content?: string } | undefined;
+        const rRaw = msgAny?.reasoning ?? msgAny?.reasoning_content;
+        if (typeof rRaw === 'string' && rRaw.trim()) {
+          assistantReasoning = rRaw.trim();
+        }
 
         if (!trimmed) {
           // Модель вернула пустой ответ — показываем понятное сообщение вместо "пустоты".
@@ -166,7 +223,7 @@ export const chatService = {
           assistantText = trimmed;
 
           // Если ответ был обрезан по лимиту токенов, явно сообщаем об этом пользователю.
-          if ((choice as any).finish_reason === 'length') {
+          if ((choice as { finish_reason?: string }).finish_reason === 'length') {
             assistantText +=
               '\n\n_(Ответ был обрезан по лимиту длины модели. Если нужно, задай уточняющий вопрос или попроси продолжить анализ.)_';
           }
@@ -182,6 +239,8 @@ export const chatService = {
         chat_session_id: sessionId,
         role: 'assistant',
         content: assistantText,
+        reasoning: assistantReasoning,
+        model_id: modelUsed,
       },
     });
 
@@ -210,6 +269,8 @@ export const chatService = {
         id: assistantMsg.id,
         role: assistantMsg.role,
         content: assistantMsg.content,
+        reasoning: assistantMsg.reasoning ?? null,
+        model_id: assistantMsg.model_id ?? null,
         created_at: assistantMsg.created_at,
       },
     };
@@ -219,10 +280,18 @@ export const chatService = {
     sessionId: number,
     userId: number,
     userContent: string,
-    onToken: (chunk: string) => void,
+    modelRequested: string | undefined,
+    emit: (evt: Record<string, unknown>) => void,
   ): Promise<{
     userMessage: { id: number; role: string; content: string; created_at: Date | null };
-    assistantMessage: { id: number; role: string; content: string; created_at: Date | null };
+    assistantMessage: {
+      id: number;
+      role: string;
+      content: string;
+      reasoning: string | null;
+      model_id: string | null;
+      created_at: Date | null;
+    };
   }> {
     const session = await db.chat_sessions.findFirst({
       where: { id: sessionId, user_id: userId },
@@ -240,8 +309,12 @@ export const chatService = {
       },
     });
 
+    const modelUsed = await resolveChatModel(modelRequested);
+    emit({ type: 'meta', model: modelUsed });
+
     const openai = getOpenAI();
     let assistantText = 'Не удалось получить ответ: сервис ИИ не настроен (OPENAI_API_KEY).';
+    let reasoningText = '';
 
     if (openai) {
       try {
@@ -263,7 +336,7 @@ export const chatService = {
         ];
 
         const stream = await openai.chat.completions.create({
-          model: process.env.OPENAI_MODEL || 'openai/gpt-4o-mini',
+          model: modelUsed,
           messages,
           max_tokens: 20000,
           temperature: 0.2,
@@ -273,16 +346,19 @@ export const chatService = {
         assistantText = '';
         let finishReason: string | null = null;
 
-        for await (const part of stream as any) {
-          const delta: string | null =
-            part?.choices?.[0]?.delta?.content != null ? String(part.choices[0].delta.content) : null;
-
-          if (delta) {
-            assistantText += delta;
-            onToken(delta);
+        for await (const part of stream as unknown as AsyncIterable<unknown>) {
+          const { content: cDelta, reasoning: rDelta } = extractStreamDeltas(part);
+          if (rDelta) {
+            reasoningText += rDelta;
+            emit({ type: 'reasoning_delta', text: rDelta });
+          }
+          if (cDelta) {
+            assistantText += cDelta;
+            emit({ type: 'content_delta', text: cDelta });
           }
 
-          const fr = part?.choices?.[0]?.finish_reason;
+          const fr = (part as { choices?: Array<{ finish_reason?: string | null }> })?.choices?.[0]
+            ?.finish_reason;
           if (fr) finishReason = String(fr);
         }
 
@@ -291,31 +367,36 @@ export const chatService = {
           const fallback =
             'Не удалось сформировать ответ на основе доступного контекста. Попробуйте переформулировать вопрос или уточнить, какие именно данные вас интересуют.';
           assistantText = fallback;
-          onToken(fallback);
+          emit({ type: 'content_delta', text: fallback });
         } else {
           assistantText = trimmed;
           if (finishReason === 'length') {
             const note =
               '\n\n_(Ответ был обрезан по лимиту длины модели. Если нужно, задай уточняющий вопрос или попроси продолжить анализ.)_';
             assistantText += note;
-            onToken(note);
+            emit({ type: 'content_delta', text: note });
           }
         }
       } catch (e: unknown) {
         const err = e as Error;
         const msg = `Ошибка при запросе к ИИ: ${err?.message ?? String(e)}`;
         assistantText = msg;
-        onToken(msg);
+        emit({ type: 'error', message: msg });
+        emit({ type: 'content_delta', text: msg });
       }
     } else {
-      onToken(assistantText);
+      emit({ type: 'content_delta', text: assistantText });
     }
+
+    const reasoningTrimmed = reasoningText.trim() || null;
 
     const assistantMsg = await db.chat_messages.create({
       data: {
         chat_session_id: sessionId,
         role: 'assistant',
         content: assistantText,
+        reasoning: reasoningTrimmed,
+        model_id: modelUsed,
       },
     });
 
@@ -333,6 +414,8 @@ export const chatService = {
       });
     }
 
+    emit({ type: 'done' });
+
     return {
       userMessage: {
         id: userMsg.id,
@@ -344,6 +427,8 @@ export const chatService = {
         id: assistantMsg.id,
         role: assistantMsg.role,
         content: assistantMsg.content,
+        reasoning: assistantMsg.reasoning ?? null,
+        model_id: assistantMsg.model_id ?? null,
         created_at: assistantMsg.created_at,
       },
     };

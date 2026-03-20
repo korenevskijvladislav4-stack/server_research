@@ -7,7 +7,11 @@ export const emailTopicService = {
     });
   },
 
-  async createEmailTopic(data: { name: string; description?: string | null }) {
+  async createEmailTopic(data: {
+    name: string;
+    description?: string | null;
+    ai_target?: 'none' | 'bonus' | 'promo';
+  }) {
     const nameTrim = data.name.trim();
     if (!nameTrim) {
       throw new Error('Название обязательно');
@@ -18,11 +22,14 @@ export const emailTopicService = {
     });
     const nextOrder = (agg._max.sort_order ?? 0) + 1;
 
+    const aiTarget = data.ai_target ?? 'none';
+
     const row = await prisma.email_topics.create({
       data: {
         name: nameTrim,
         description: data.description ? data.description.trim() : null,
         sort_order: nextOrder,
+        ai_target: aiTarget,
       },
     });
 
@@ -31,7 +38,12 @@ export const emailTopicService = {
 
   async updateEmailTopic(
     id: number,
-    data: { name?: string; description?: string | null; sort_order?: number },
+    data: {
+      name?: string;
+      description?: string | null;
+      sort_order?: number;
+      ai_target?: 'none' | 'bonus' | 'promo';
+    },
   ) {
     const updateData: any = {};
     if (data.name !== undefined) {
@@ -42,6 +54,9 @@ export const emailTopicService = {
     }
     if (data.sort_order !== undefined) {
       updateData.sort_order = data.sort_order;
+    }
+    if (data.ai_target !== undefined) {
+      updateData.ai_target = data.ai_target;
     }
 
     if (Object.keys(updateData).length === 0) {

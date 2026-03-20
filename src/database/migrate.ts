@@ -1038,6 +1038,95 @@ const createTables = async () => {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS chat_ai_models (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        model_id VARCHAR(255) NOT NULL,
+        label VARCHAR(255) NOT NULL,
+        input_price_per_million DECIMAL(16,8) NULL,
+        output_price_per_million DECIMAL(16,8) NULL,
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        sort_order INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_chat_ai_models_model_id (model_id),
+        KEY idx_chat_ai_models_active (is_active),
+        KEY idx_chat_ai_models_sort (sort_order)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // chat_messages: поля для цепочки рассуждений и id модели (чат с ИИ)
+    const [chatMessagesTableRows] = await connection.query<any[]>(`
+      SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'chat_messages'
+    `);
+    const chatMessagesExists =
+      Array.isArray(chatMessagesTableRows) && chatMessagesTableRows[0]?.cnt > 0;
+    if (chatMessagesExists) {
+      const ensureChatMessageCol = async (columnName: string, columnDef: string, after: string) => {
+        const [colRows] = await connection.query<any[]>(
+          `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS
+           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'chat_messages' AND COLUMN_NAME = ?`,
+          [columnName],
+        );
+        const exists = Array.isArray(colRows) && colRows[0]?.cnt > 0;
+        if (!exists) {
+          await connection.query(
+            `ALTER TABLE chat_messages ADD COLUMN \`${columnName}\` ${columnDef} AFTER \`${after}\``,
+          );
+          console.log(`Added chat_messages.${columnName}`);
+        }
+      };
+      await ensureChatMessageCol('reasoning', 'TEXT NULL', 'content');
+      await ensureChatMessageCol('model_id', 'VARCHAR(255) NULL', 'reasoning');
+    }
+
+    // email_topics: категория ИИ (бонус / промо из письма)
+    try {
+      const [aiTargetCol] = await connection.query<any[]>(`
+        SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'email_topics' AND COLUMN_NAME = 'ai_target'
+      `);
+      if (Array.isArray(aiTargetCol) && aiTargetCol[0]?.cnt === 0) {
+        await connection.query(`
+          ALTER TABLE email_topics
+          ADD COLUMN ai_target ENUM('none','bonus','promo') NOT NULL DEFAULT 'none'
+        `);
+        console.log('Added email_topics.ai_target');
+      }
+    } catch (err: any) {
+      console.error('Error adding email_topics.ai_target:', err?.message || err);
+    }
+
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS ai_email_proposals (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        email_id INT NOT NULL,
+        topic_id INT NULL,
+        proposal_type ENUM('bonus','promo') NOT NULL,
+        status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+        viewed_at TIMESTAMP NULL,
+        payload_json JSON NOT NULL,
+        suggested_casino_id INT NULL,
+        suggested_geo VARCHAR(10) NULL,
+        casino_name_guess VARCHAR(255) NULL,
+        error_message TEXT NULL,
+        resolved_bonus_id INT NULL,
+        resolved_promo_id INT NULL,
+        reviewed_by INT NULL,
+        reviewed_at TIMESTAMP NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_ai_proposal_email_type (email_id, proposal_type),
+        KEY idx_ai_proposal_status (status),
+        KEY idx_ai_proposal_viewed (viewed_at),
+        CONSTRAINT ai_email_proposals_email_fk FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+        CONSTRAINT ai_email_proposals_topic_fk FOREIGN KEY (topic_id) REFERENCES email_topics(id) ON DELETE SET NULL,
+        CONSTRAINT ai_email_proposals_casino_fk FOREIGN KEY (suggested_casino_id) REFERENCES casinos(id) ON DELETE SET NULL,
+        CONSTRAINT ai_email_proposals_user_fk FOREIGN KEY (reviewed_by) REFERENCES users(id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
     // Drop removed columns from casino_promos if they exist (migration for existing DBs)
     for (const col of ['promo_kind', 'participation_button', 'notes']) {
       const [rows] = await connection.query<any[]>(

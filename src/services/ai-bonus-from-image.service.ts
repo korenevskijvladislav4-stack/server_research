@@ -54,6 +54,8 @@ const BONUS_FROM_IMAGE_SYSTEM_PROMPT = `Ты — помощник аналити
 - valid_to: строка даты в формате "YYYY-MM-DD" — дата окончания, если указана.
 - status: одно из ["active","paused","expired","draft"] — можно прикинуть по тексту, но если не очевидно, ставь "active".
 - notes: произвольная строка с полезными уточнениями, которые не поместились в поля (например ограничения по странам, ставкам, типам игр).
+- casino_name: строка — название бренда казино, если видно на баннере или в тексте письма.
+- geo: строка из 2–4 символов — код региона (ISO 3166-1 alpha-2, например DE, BR) или "ALL", если для всех гео.
 
 ВАЖНО:
 - Если поле однозначно прочитать нельзя — верни для него null или не включай.
@@ -69,7 +71,7 @@ const BONUS_FROM_IMAGE_SYSTEM_PROMPT = `Ты — помощник аналити
 export async function extractBonusFromImage(
   imagePath: string,
   mimeType?: string,
-  extraContext?: { geo?: string | null },
+  extraContext?: { geo?: string | null; emailText?: string | null },
 ): Promise<Record<string, unknown> | null> {
   const openai = getClient();
   if (!openai) return null;
@@ -88,7 +90,14 @@ export async function extractBonusFromImage(
     if (extraContext?.geo) {
       userContent.push({
         type: 'text',
-        text: `GEO: ${extraContext.geo}`,
+        text: `GEO (подсказка из CRM): ${extraContext.geo}`,
+      });
+    }
+
+    if (extraContext?.emailText?.trim()) {
+      userContent.push({
+        type: 'text',
+        text: `Текст письма (дополнительно к скриншоту):\n${extraContext.emailText.trim().slice(0, 8000)}`,
       });
     }
 
@@ -166,6 +175,8 @@ export async function extractBonusFromImage(
       'valid_to',
       'status',
       'notes',
+      'casino_name',
+      'geo',
     ].forEach(copyIfDefined);
 
     // Санитизация заведомо некорректных значений max_win с "коэффициентами".

@@ -1,7 +1,12 @@
 import { Response } from 'express';
 import { AuthRequest } from '../../middleware/auth.middleware';
 import { chatService } from './chat.service';
+import { getChatModelsForClient } from './chatModel.service';
 import { AppError } from '../../errors/AppError';
+
+export async function getChatConfig(_req: AuthRequest, res: Response): Promise<void> {
+  res.json(await getChatModelsForClient());
+}
 
 export async function listChats(req: AuthRequest, res: Response): Promise<void> {
   const userId = req.user?.id;
@@ -64,7 +69,8 @@ export async function sendMessage(req: AuthRequest, res: Response): Promise<void
   if (typeof content !== 'string' || !content.trim()) {
     throw new AppError(400, 'Текст сообщения обязателен');
   }
-  const result = await chatService.addMessageAndReply(sessionId, userId, content.trim());
+  const model = typeof req.body?.model === 'string' ? req.body.model : undefined;
+  const result = await chatService.addMessageAndReply(sessionId, userId, content.trim(), model);
   res.status(201).json(result);
 }
 
@@ -81,14 +87,14 @@ export async function sendMessageStream(req: AuthRequest, res: Response): Promis
   if (typeof content !== 'string' || !content.trim()) {
     throw new AppError(400, 'Текст сообщения обязателен');
   }
+  const model = typeof req.body?.model === 'string' ? req.body.model : undefined;
 
-  // Подготавливаем ответ для стриминга текста (chunked transfer).
-  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
 
-  await chatService.addMessageAndReplyStream(sessionId, userId, content.trim(), (chunk) => {
-    res.write(chunk);
+  await chatService.addMessageAndReplyStream(sessionId, userId, content.trim(), model, (evt) => {
+    res.write(`${JSON.stringify(evt)}\n`);
   });
 
   res.end();

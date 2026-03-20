@@ -76,3 +76,28 @@ export async function createProvider(req: Request, res: Response): Promise<void>
   if (isNew) res.status(201).json(item);
   else res.json(item);
 }
+
+export async function deleteBonusName(req: Request, res: Response): Promise<void> {
+  await refService.bonusNames.deleteById(Number(req.params.id));
+  res.status(204).send();
+}
+
+export async function deletePaymentType(req: Request, res: Response): Promise<void> {
+  await refService.paymentTypes.deleteById(Number(req.params.id));
+  res.status(204).send();
+}
+
+export async function deletePaymentMethod(req: Request, res: Response): Promise<void> {
+  await refService.paymentMethods.deleteById(Number(req.params.id));
+  res.status(204).send();
+}
+
+export async function deletePromoType(req: Request, res: Response): Promise<void> {
+  await refService.promoTypes.deleteById(Number(req.params.id));
+  res.status(204).send();
+}
+
+export async function deleteProvider(req: Request, res: Response): Promise<void> {
+  await refService.providers.deleteById(Number(req.params.id));
+  res.status(204).send();
+}

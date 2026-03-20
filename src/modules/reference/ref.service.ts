@@ -1,6 +1,20 @@
 import prisma from '../../lib/prisma';
+import { AppError } from '../../errors/AppError';
 
 const byName = (name: string) => name.trim();
+
+async function safeDelete(
+  run: () => Promise<unknown>,
+  notFoundMessage: string,
+): Promise<void> {
+  try {
+    await run();
+  } catch (e: unknown) {
+    const err = e as { code?: string };
+    if (err.code === 'P2025') throw new AppError(404, notFoundMessage);
+    throw e;
+  }
+}
 
 export const refService = {
   bonusNames: {
@@ -14,6 +28,9 @@ export const refService = {
       const created = await prisma.ref_bonus_names.create({ data: { name: n } });
       return { item: created, isNew: true };
     },
+    async deleteById(id: number) {
+      await safeDelete(() => prisma.ref_bonus_names.delete({ where: { id } }), 'Запись не найдена');
+    },
   },
   paymentTypes: {
     async list() {
@@ -25,6 +42,9 @@ export const refService = {
       if (existing) return { item: existing, isNew: false };
       const created = await prisma.ref_payment_types.create({ data: { name: n } });
       return { item: created, isNew: true };
+    },
+    async deleteById(id: number) {
+      await safeDelete(() => prisma.ref_payment_types.delete({ where: { id } }), 'Запись не найдена');
     },
   },
   paymentMethods: {
@@ -38,6 +58,9 @@ export const refService = {
       const created = await prisma.ref_payment_methods.create({ data: { name: n } });
       return { item: created, isNew: true };
     },
+    async deleteById(id: number) {
+      await safeDelete(() => prisma.ref_payment_methods.delete({ where: { id } }), 'Запись не найдена');
+    },
   },
   promoTypes: {
     async list() {
@@ -50,6 +73,9 @@ export const refService = {
       const created = await prisma.ref_promo_types.create({ data: { name: n } });
       return { item: created, isNew: true };
     },
+    async deleteById(id: number) {
+      await safeDelete(() => prisma.ref_promo_types.delete({ where: { id } }), 'Запись не найдена');
+    },
   },
   providers: {
     async list() {
@@ -61,6 +87,9 @@ export const refService = {
       if (existing) return { item: existing, isNew: false };
       const created = await prisma.providers.create({ data: { name: n } });
       return { item: created, isNew: true };
+    },
+    async deleteById(id: number) {
+      await safeDelete(() => prisma.providers.delete({ where: { id } }), 'Провайдер не найден');
     },
   },
 };

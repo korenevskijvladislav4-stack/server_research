@@ -10,6 +10,24 @@ import type { ConnectionType } from '../../models/ImapAccount';
 import { AppError } from '../../errors/AppError';
 import { summarizeEmailsByIds, assignEmailTopicsByIds } from '../../services/ai-summary.service';
 import { screenshotEmailsByIds } from '../../services/email-screenshot.service';
+
+/** Сначала скриншоты, потом саммари и темы — иначе ИИ-предложение часто не находит файл/скрин. */
+function runPostSyncAiPipeline(newIds: number[]): void {
+  if (newIds.length === 0) return;
+  void (async () => {
+    try {
+      await screenshotEmailsByIds(newIds);
+    } catch (e) {
+      console.error('[EmailSync] Screenshot error (non-fatal):', e);
+    }
+    summarizeEmailsByIds(newIds).catch((err) =>
+      console.error('AI summary error (non-fatal):', err),
+    );
+    assignEmailTopicsByIds(newIds).catch((err) =>
+      console.error('AI topic assignment error (non-fatal):', err),
+    );
+  })();
+}
 import { emailService } from './email.service';
 import prisma from '../../lib/prisma';
 
@@ -212,15 +230,7 @@ export const syncEmails = async (req: Request, res: Response): Promise<void> => 
         services.push(imapService);
         const { synced: syncedCount, newIds } = await imapService.syncEmailsToDatabase();
         if (newIds.length > 0) {
-          summarizeEmailsByIds(newIds).catch((e) =>
-            console.error('AI summary error (non-fatal):', e),
-          );
-          assignEmailTopicsByIds(newIds).catch((e) =>
-            console.error('AI topic assignment error (non-fatal):', e),
-          );
-          screenshotEmailsByIds(newIds).catch((e) =>
-            console.error('Screenshot error (non-fatal):', e),
-          );
+          runPostSyncAiPipeline(newIds);
         }
         res.json({
           message: `Synced ${syncedCount} new emails (env)`,
@@ -277,15 +287,7 @@ export const syncEmails = async (req: Request, res: Response): Promise<void> => 
     }
 
     if (allNewIds.length > 0) {
-      summarizeEmailsByIds(allNewIds).catch((e) =>
-        console.error('AI summary error (non-fatal):', e),
-      );
-      assignEmailTopicsByIds(allNewIds).catch((e) =>
-        console.error('AI topic assignment error (non-fatal):', e),
-      );
-      screenshotEmailsByIds(allNewIds).catch((e) =>
-        console.error('Screenshot error (non-fatal):', e),
-      );
+      runPostSyncAiPipeline(allNewIds);
     }
 
     res.json({

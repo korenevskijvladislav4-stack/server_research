@@ -79,9 +79,10 @@ export async function screenshotEmail(emailId: number): Promise<string | null> {
 
     try {
       await page.setViewport({ width: VIEWPORT_WIDTH, height: 600 });
-      await page.setContent(fullHtml, { waitUntil: 'networkidle0', timeout: 15000 });
+      // networkidle0 часто не наступает в промо-письмах (пиксели, баннеры) → таймаут и нет скрина
+      await page.setContent(fullHtml, { waitUntil: 'load', timeout: 25000 });
 
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 800));
 
       const bodyHeight = await page.evaluate('document.body.scrollHeight') as number;
       const height = Math.min(bodyHeight, MAX_HEIGHT);

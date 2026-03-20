@@ -353,6 +353,7 @@ model casinos {
   casino_accounts        casino_accounts[]
   casino_bonus_images    casino_bonus_images[]
   casino_bonuses         casino_bonuses[]
+  ai_email_proposals     ai_email_proposals[]
   casino_comment_images  casino_comment_images[]
   casino_comments        casino_comments[]
   casino_payment_images  casino_payment_images[]
@@ -388,12 +389,44 @@ model email_attachments {
 }
 
 model email_topics {
-  id          Int       @id @default(autoincrement())
-  name        String    @db.VarChar(255)
-  description String?   @db.Text
-  sort_order  Int       @default(0)
-  created_at  DateTime? @default(now()) @db.Timestamp(0)
-  updated_at  DateTime? @default(now()) @db.Timestamp(0)
+  id                 Int                      @id @default(autoincrement())
+  name               String                   @db.VarChar(255)
+  description        String?                  @db.Text
+  sort_order         Int                      @default(0)
+  // После классификации: создавать ИИ-предложение бонуса или промо
+  ai_target          email_topics_ai_target   @default(none)
+  created_at         DateTime?                @default(now()) @db.Timestamp(0)
+  updated_at         DateTime?                @default(now()) @db.Timestamp(0)
+  ai_email_proposals ai_email_proposals[]
+}
+
+model ai_email_proposals {
+  id                  Int                       @id @default(autoincrement())
+  email_id            Int
+  topic_id            Int?
+  proposal_type       ai_email_proposals_type
+  status              ai_email_proposals_status @default(pending)
+  // Админ открыл карточку (вкладка «Просмотрены»)
+  viewed_at           DateTime?                 @db.Timestamp(0)
+  payload_json        Json
+  suggested_casino_id Int?
+  suggested_geo       String?                   @db.VarChar(10)
+  casino_name_guess   String?                   @db.VarChar(255)
+  error_message       String?                   @db.Text
+  resolved_bonus_id   Int?
+  resolved_promo_id   Int?
+  reviewed_by         Int?
+  reviewed_at         DateTime?                 @db.Timestamp(0)
+  created_at          DateTime?                 @default(now()) @db.Timestamp(0)
+  updated_at          DateTime?                 @default(now()) @db.Timestamp(0)
+  emails              emails                    @relation(fields: [email_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "ai_email_proposals_email_fk")
+  email_topics        email_topics?             @relation(fields: [topic_id], references: [id], onDelete: SetNull, onUpdate: NoAction, map: "ai_email_proposals_topic_fk")
+  casinos             casinos?                  @relation(fields: [suggested_casino_id], references: [id], onDelete: SetNull, onUpdate: NoAction, map: "ai_email_proposals_casino_fk")
+  users               users?                    @relation(fields: [reviewed_by], references: [id], onUpdate: NoAction, map: "ai_email_proposals_user_fk")
+
+  @@unique([email_id, proposal_type], map: "uq_ai_proposal_email_type")
+  @@index([status], map: "idx_ai_proposal_status")
+  @@index([viewed_at], map: "idx_ai_proposal_viewed")
 }
 
 model emails {
@@ -414,6 +447,7 @@ model emails {
   ai_summary        String?             @db.Text
   screenshot_url    String?             @db.VarChar(500)
   topic_id          Int?
+  ai_email_proposals ai_email_proposals[]
   email_attachments email_attachments[]
   casinos           casinos?            @relation(fields: [related_casino_id], references: [id], onUpdate: NoAction, map: "emails_ibfk_1")
   promo_campaigns   promo_campaigns?    @relation(fields: [related_promo_id], references: [id], onUpdate: NoAction, map: "emails_ibfk_2")
@@ -620,6 +654,21 @@ model tags {
   casino_tags casino_tags[]
 }
 
+model chat_ai_models {
+  id                       Int       @id @default(autoincrement())
+  model_id                 String    @unique(map: "uq_chat_ai_models_model_id") @db.VarChar(255)
+  label                    String    @db.VarChar(255)
+  input_price_per_million  Decimal?  @db.Decimal(16, 8)
+  output_price_per_million Decimal?  @db.Decimal(16, 8)
+  is_active                Boolean   @default(true)
+  sort_order               Int       @default(0)
+  created_at               DateTime? @default(now()) @db.Timestamp(0)
+  updated_at               DateTime? @default(now()) @updatedAt @db.Timestamp(0)
+
+  @@index([is_active], map: "idx_chat_ai_models_active")
+  @@index([sort_order], map: "idx_chat_ai_models_sort")
+}
+
 model chat_sessions {
   id             Int            @id @default(autoincrement())
   user_id        Int
@@ -633,12 +682,14 @@ model chat_sessions {
 }
 
 model chat_messages {
-  id              Int           @id @default(autoincrement())
+  id              Int               @id @default(autoincrement())
   chat_session_id Int
   role            chat_message_role @default(user)
-  content         String        @db.Text
-  created_at      DateTime?     @default(now()) @db.Timestamp(0)
-  chat_sessions   chat_sessions @relation(fields: [chat_session_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "chat_messages_ibfk_1")
+  content         String            @db.Text
+  reasoning       String?           @db.Text // chain-of-thought / reasoning stream when API provides it
+  model_id        String?           @db.VarChar(255) // OpenRouter model id used for the reply
+  created_at      DateTime?         @default(now()) @db.Timestamp(0)
+  chat_sessions   chat_sessions     @relation(fields: [chat_session_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "chat_messages_ibfk_1")
 
   @@index([chat_session_id], map: "idx_chat_session_id")
 }
@@ -670,6 +721,7 @@ model users {
   casinos                                                       casinos[]
   chat_sessions                                                 chat_sessions[]
   promo_campaigns                                               promo_campaigns[]
+  ai_email_proposals_reviewed                                   ai_email_proposals[]
 }
 
 enum chat_message_role {
@@ -790,4 +842,21 @@ enum casino_bonuses_status {
   paused
   expired
   draft
+}
+
+enum email_topics_ai_target {
+  none
+  bonus
+  promo
+}
+
+enum ai_email_proposals_type {
+  bonus
+  promo
+}
+
+enum ai_email_proposals_status {
+  pending
+  approved
+  rejected
 }

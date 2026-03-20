@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import prisma from '../lib/prisma';
+import { tryCreateEmailAiProposal } from './email-ai-proposal.service';
 
 let client: OpenAI | null = null;
 
@@ -128,7 +129,7 @@ export async function assignEmailTopic(emailId: number): Promise<number | null> 
   try {
     const topics = await prisma.email_topics.findMany({
       orderBy: [{ sort_order: 'asc' }, { name: 'asc' }],
-      select: { id: true, name: true, description: true },
+      select: { id: true, name: true, description: true, ai_target: true },
     });
     if (topics.length === 0) return null;
 
@@ -143,7 +144,15 @@ export async function assignEmailTopic(emailId: number): Promise<number | null> 
     if (body.length > 2500) body = body.slice(0, 2500) + '…';
 
     const topicList = topics
-      .map((t) => `ID ${t.id}: "${t.name}" — ${t.description || '(без описания)'}`)
+      .map((t) => {
+        const hint =
+          t.ai_target === 'bonus'
+            ? ' [ИИ: разбор бонуса по скриншоту письма]'
+            : t.ai_target === 'promo'
+              ? ' [ИИ: разбор промо по скриншоту письма]'
+              : '';
+        return `ID ${t.id}: "${t.name}" — ${t.description || '(без описания)'}${hint}`;
+      })
       .join('\n');
     const userContent = [
       'Темы (выбери один id или 0):',
@@ -166,6 +175,16 @@ export async function assignEmailTopic(emailId: number): Promise<number | null> 
     const num = parseInt(content.replace(/\D/g, ''), 10);
     const topicId = Number.isNaN(num) ? null : num === 0 ? null : topics.some((t) => t.id === num) ? num : null;
     await prisma.emails.update({ where: { id: emailId }, data: { topic_id: topicId } });
+
+    if (topicId != null) {
+      const topic = await prisma.email_topics.findUnique({ where: { id: topicId } });
+      if (topic && (topic.ai_target === 'bonus' || topic.ai_target === 'promo')) {
+        void tryCreateEmailAiProposal(emailId, topicId, topic.ai_target).catch((e) =>
+          console.error('[AiEmailProposal]', (e as any)?.message || e),
+        );
+      }
+    }
+
     return topicId;
   } catch (error: any) {
     console.error(`assignEmailTopic error for email ${emailId}:`, error?.message || error);

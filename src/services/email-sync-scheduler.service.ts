@@ -123,6 +123,11 @@ async function runSync(): Promise<void> {
 
     if (allNewIds.length > 0) {
       try {
+        await screenshotEmailsByIds(allNewIds);
+      } catch (e) {
+        console.error('[EmailScheduler] Screenshot error:', e);
+      }
+      try {
         await summarizeEmailsByIds(allNewIds);
       } catch (e) {
         console.error('[EmailScheduler] AI summary error:', e);
@@ -131,11 +136,6 @@ async function runSync(): Promise<void> {
         await assignEmailTopicsByIds(allNewIds);
       } catch (e) {
         console.error('[EmailScheduler] AI topic assignment error:', e);
-      }
-      try {
-        await screenshotEmailsByIds(allNewIds);
-      } catch (e) {
-        console.error('[EmailScheduler] Screenshot error:', e);
       }
     }
   } catch (error: any) {
