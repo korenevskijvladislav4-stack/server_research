@@ -11,7 +11,11 @@ import { AppError } from '../../errors/AppError';
 import { summarizeEmailsByIds, assignEmailTopicsByIds } from '../../services/ai-summary.service';
 import { screenshotEmailsByIds } from '../../services/email-screenshot.service';
 
-/** Сначала скриншоты, потом саммари и темы — иначе ИИ-предложение часто не находит файл/скрин. */
+/**
+ * После ручного синка: скриншоты → саммари → темы (и предложения ИИ по темам с ai_target).
+ * Важно: шаги последовательны и с await — как в email-sync-scheduler; иначе параллельный OpenAI
+ * (саммари + темы) давит лимиты, темы не присваиваются и предложения ИИ не создаются.
+ */
 function runPostSyncAiPipeline(newIds: number[]): void {
   if (newIds.length === 0) return;
   void (async () => {
@@ -20,12 +24,16 @@ function runPostSyncAiPipeline(newIds: number[]): void {
     } catch (e) {
       console.error('[EmailSync] Screenshot error (non-fatal):', e);
     }
-    summarizeEmailsByIds(newIds).catch((err) =>
-      console.error('AI summary error (non-fatal):', err),
-    );
-    assignEmailTopicsByIds(newIds).catch((err) =>
-      console.error('AI topic assignment error (non-fatal):', err),
-    );
+    try {
+      await summarizeEmailsByIds(newIds);
+    } catch (err) {
+      console.error('AI summary error (non-fatal):', err);
+    }
+    try {
+      await assignEmailTopicsByIds(newIds);
+    } catch (err) {
+      console.error('AI topic assignment error (non-fatal):', err);
+    }
   })();
 }
 import { emailService } from './email.service';

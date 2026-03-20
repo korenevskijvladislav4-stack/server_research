@@ -179,9 +179,11 @@ export async function assignEmailTopic(emailId: number): Promise<number | null> 
     if (topicId != null) {
       const topic = await prisma.email_topics.findUnique({ where: { id: topicId } });
       if (topic && (topic.ai_target === 'bonus' || topic.ai_target === 'promo')) {
-        void tryCreateEmailAiProposal(emailId, topicId, topic.ai_target).catch((e) =>
-          console.error('[AiEmailProposal]', (e as any)?.message || e),
-        );
+        try {
+          await tryCreateEmailAiProposal(emailId, topicId, topic.ai_target);
+        } catch (e: any) {
+          console.error('[AiEmailProposal]', e?.message || e);
+        }
       }
     }
 
@@ -195,7 +197,12 @@ export async function assignEmailTopic(emailId: number): Promise<number | null> 
 export async function assignEmailTopicsByIds(ids: number[]): Promise<number> {
   if (!ids || ids.length === 0) return 0;
   const openai = getClient();
-  if (!openai) return 0;
+  if (!openai) {
+    console.warn(
+      '[EmailSync] OPENAI_API_KEY не задан — пропуск авто-тем и предложений ИИ после синка',
+    );
+    return 0;
+  }
   let count = 0;
   for (const id of ids) {
     try {

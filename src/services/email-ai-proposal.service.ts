@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs';
+import { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { screenshotEmail } from './email-screenshot.service';
 import { extractBonusFromImage } from './ai-bonus-from-image.service';
@@ -10,6 +11,37 @@ import { AppError } from '../errors/AppError';
 
 const SCREENSHOTS_DIR = path.resolve(__dirname, '../../uploads/email-screenshots');
 const uploadsRoot = path.resolve(__dirname, '../../uploads');
+
+/** GEO ящика получателя — как в списке писем (JOIN casino_accounts по to_email + related_casino_id). */
+async function fetchEmailGeosByIds(emailIds: number[]): Promise<Map<number, string | null>> {
+  const map = new Map<number, string | null>();
+  const uniq = [...new Set(emailIds.filter((id) => id > 0))];
+  if (uniq.length === 0) return map;
+  const rows = await prisma.$queryRaw<{ id: bigint | number; geo: string | null }[]>(
+    Prisma.sql`
+      SELECT e.id, ca.geo AS geo
+      FROM emails e
+      LEFT JOIN casino_accounts ca ON ca.email = e.to_email AND ca.casino_id = e.related_casino_id
+      WHERE e.id IN (${Prisma.join(uniq)})
+    `,
+  );
+  for (const r of rows) {
+    map.set(Number(r.id), r.geo);
+  }
+  return map;
+}
+
+function attachEmailGeo<T extends { email_id: number; emails: Record<string, unknown> | null }>(
+  row: T,
+  geoByEmail: Map<number, string | null>,
+): T {
+  const g = geoByEmail.get(row.email_id) ?? null;
+  if (!row.emails) return row;
+  return {
+    ...row,
+    emails: { ...row.emails, geo: g },
+  };
+}
 
 function firstGeoFromCasinoGeo(geo: unknown): string | null {
   if (geo == null) return null;
@@ -247,17 +279,19 @@ export const aiEmailProposalService = {
             screenshot_url: true,
             from_email: true,
             from_name: true,
+            to_email: true,
           },
         },
         email_topics: { select: { id: true, name: true } },
         casinos: { select: { id: true, name: true } },
       },
     });
-    return rows;
+    const geoByEmail = await fetchEmailGeosByIds(rows.map((r) => r.email_id));
+    return rows.map((r) => attachEmailGeo(r, geoByEmail));
   },
 
   async getById(id: number) {
-    return prisma.ai_email_proposals.findUnique({
+    const row = await prisma.ai_email_proposals.findUnique({
       where: { id },
       include: {
         emails: {
@@ -270,12 +304,16 @@ export const aiEmailProposalService = {
             from_name: true,
             body_text: true,
             related_casino_id: true,
+            to_email: true,
           },
         },
         email_topics: { select: { id: true, name: true } },
         casinos: { select: { id: true, name: true } },
       },
     });
+    if (!row) return null;
+    const geoByEmail = await fetchEmailGeosByIds([row.email_id]);
+    return attachEmailGeo(row, geoByEmail);
   },
 
   async markViewed(id: number) {
