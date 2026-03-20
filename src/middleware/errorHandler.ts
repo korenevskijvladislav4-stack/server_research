@@ -103,6 +103,20 @@ export const errorHandler = (
     return;
   }
 
+  const anyErr = err as Error & { type?: string; statusCode?: number };
+  if (
+    anyErr.name === 'PayloadTooLargeError' ||
+    anyErr.type === 'entity.too.large' ||
+    anyErr.statusCode === 413
+  ) {
+    res.status(413).json({
+      error:
+        'Тело запроса слишком большое. Вставьте меньший фрагмент текста или увеличьте JSON_BODY_LIMIT на сервере.',
+      code: 'PAYLOAD_TOO_LARGE',
+    });
+    return;
+  }
+
   res.status(500).json({
     error: 'Внутренняя ошибка сервера',
     ...(isDev && { message: err.message, stack: err.stack, path: req.path, method: req.method }),

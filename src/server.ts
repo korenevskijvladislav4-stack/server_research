@@ -112,8 +112,10 @@ app.use(helmet({
 }));
 
 app.use(morgan('dev'));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Выгрузка провайдеров (HTML/JSON страницы) легко превышает дефолт 100kb body-parser
+const jsonBodyLimit = process.env.JSON_BODY_LIMIT || '10mb';
+app.use(express.json({ limit: jsonBodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: jsonBodyLimit }));
 
 // Static files for uploaded images
 // In development: __dirname = server/src, so ../uploads = server/uploads
