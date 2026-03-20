@@ -7,6 +7,9 @@ import { parseQueryParams } from '../../common/utils';
 import { casinoPaymentService, type PaymentFilters } from './casinoPayment.service';
 import { AppError } from '../../errors/AppError';
 import { AuthRequest } from '../../middleware/auth.middleware';
+import { extractPaymentFromImage } from '../../services/ai-payment-from-image.service';
+
+type AuthRequestWithFile = AuthRequest & { file?: Express.Multer.File };
 
 const uploadsRoot = path.join(__dirname, '..', '..', '..', 'uploads');
 
@@ -236,4 +239,45 @@ export async function deletePaymentImage(req: AuthRequest, res: Response): Promi
     fs.unlinkSync(filePath);
   }
   res.json({ message: 'Image deleted successfully' });
+}
+
+export async function analyzePaymentImage(req: AuthRequestWithFile, res: Response): Promise<void> {
+  const casinoId = Number(req.params.casinoId);
+  if (!casinoId) {
+    throw new AppError(400, 'Некорректный ID казино');
+  }
+
+  const file = req.file;
+  if (!file) {
+    throw new AppError(400, 'Файл не загружен');
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    throw new AppError(503, 'AI-анализ платежей не настроен');
+  }
+
+  const geo =
+    (req.body?.geo as string | undefined) ||
+    (req.query?.geo as string | undefined) ||
+    undefined;
+  const direction =
+    (req.body?.direction as string | undefined) ||
+    (req.query?.direction as string | undefined) ||
+    undefined;
+
+  const suggestions = await extractPaymentFromImage(file.path, file.mimetype, {
+    geo: geo ?? null,
+    direction: direction ?? null,
+  });
+
+  if (file.path && fs.existsSync(file.path)) {
+    void fs.promises.unlink(file.path).catch(() => undefined);
+  }
+
+  if (!suggestions) {
+    res.json({ suggestions: null });
+    return;
+  }
+
+  res.json({ suggestions });
 }

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authenticate } from '../../middleware/auth.middleware';
 import { asyncHandler } from '../../middleware/asyncHandler';
-import { paymentImageUpload } from './paymentUpload.middleware';
+import { paymentImageUpload, paymentAiImageUpload } from './paymentUpload.middleware';
 import * as ctrl from './casinoPayment.controller';
 
 const router = Router();
@@ -13,6 +13,21 @@ router.get('/casinos/:casinoId/payments', authenticate, asyncHandler(ctrl.listCa
 router.post('/casinos/:casinoId/payments', authenticate, asyncHandler(ctrl.createCasinoPayment));
 router.put('/casinos/:casinoId/payments/:id', authenticate, asyncHandler(ctrl.updateCasinoPayment));
 router.delete('/casinos/:casinoId/payments/:id', authenticate, asyncHandler(ctrl.deleteCasinoPayment));
+
+router.post(
+  '/casinos/:casinoId/payments/ai-from-image',
+  authenticate,
+  (req, res, next) => {
+    paymentAiImageUpload(req, res, (err: any) => {
+      if (err) {
+        res.status(400).json({ error: err.message || 'Ошибка загрузки файла' });
+        return;
+      }
+      next();
+    });
+  },
+  asyncHandler(ctrl.analyzePaymentImage)
+);
 
 router.post(
   '/casinos/:casinoId/payments/:paymentId/images',
