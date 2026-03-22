@@ -368,7 +368,9 @@ model casinos {
   casino_promos          casino_promos[]
   casino_providers       casino_providers[]
   casino_tags            casino_tags[]
-  casino_tasks           casino_tasks[]
+  casino_tasks              casino_tasks[]
+  casino_loyalty_programs        casino_loyalty_programs[]
+  casino_loyalty_status_images   casino_loyalty_status_images[]
   users                  users?                   @relation(fields: [created_by], references: [id], onUpdate: NoAction, map: "casinos_ibfk_1")
   emails                 emails[]
   profile_settings       profile_settings[]
@@ -377,6 +379,47 @@ model casinos {
   slots                  slots[]
 
   @@index([created_by], map: "created_by")
+}
+
+model casino_loyalty_programs {
+  id            Int                                 @id @default(autoincrement())
+  casino_id     Int
+  geo           String                              @db.VarChar(10)
+  orientation   casino_loyalty_programs_orientation
+  conditions_md String                              @db.LongText
+  created_at    DateTime?                           @default(now()) @db.Timestamp(0)
+  updated_at    DateTime?                           @default(now()) @db.Timestamp(0)
+  casinos       casinos                             @relation(fields: [casino_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "casino_loyalty_programs_casino_fk")
+  statuses      casino_loyalty_statuses[]
+
+  @@unique([casino_id, geo, orientation], map: "uq_casino_loyalty_geo_orientation")
+  @@index([casino_id], map: "idx_loyalty_casino")
+}
+
+model casino_loyalty_statuses {
+  id             Int                            @id @default(autoincrement())
+  program_id     Int
+  name           String                         @db.VarChar(255)
+  description_md String                         @db.LongText
+  sort_order     Int                            @default(0)
+  program        casino_loyalty_programs        @relation(fields: [program_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "casino_loyalty_statuses_program_fk")
+  images         casino_loyalty_status_images[]
+
+  @@index([program_id], map: "idx_loyalty_status_program")
+}
+
+model casino_loyalty_status_images {
+  id             Int                     @id @default(autoincrement())
+  casino_id      Int
+  status_id      Int
+  file_path      String                  @db.VarChar(500)
+  original_name  String?                 @db.VarChar(255)
+  created_at     DateTime?               @default(now()) @db.Timestamp(0)
+  casinos        casinos                 @relation(fields: [casino_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "casino_loyalty_status_img_casino_fk")
+  status         casino_loyalty_statuses @relation(fields: [status_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "casino_loyalty_status_img_status_fk")
+
+  @@index([status_id], map: "idx_loyalty_status_img_status")
+  @@index([casino_id], map: "idx_loyalty_status_img_casino")
 }
 
 model email_attachments {
@@ -863,4 +906,9 @@ enum ai_email_proposals_status {
   pending
   approved
   rejected
+}
+
+enum casino_loyalty_programs_orientation {
+  casino
+  sport
 }

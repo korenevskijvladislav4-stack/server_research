@@ -1152,6 +1152,48 @@ const createTables = async () => {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS casino_loyalty_programs (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        casino_id INT NOT NULL,
+        geo VARCHAR(10) NOT NULL,
+        orientation ENUM('casino','sport') NOT NULL,
+        conditions_md LONGTEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_casino_loyalty_geo_orientation (casino_id, geo, orientation),
+        KEY idx_loyalty_casino (casino_id),
+        CONSTRAINT casino_loyalty_programs_casino_fk FOREIGN KEY (casino_id) REFERENCES casinos(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS casino_loyalty_statuses (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        program_id INT NOT NULL,
+        name VARCHAR(255) NOT NULL,
+        description_md LONGTEXT NOT NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        KEY idx_loyalty_status_program (program_id),
+        CONSTRAINT casino_loyalty_statuses_program_fk FOREIGN KEY (program_id) REFERENCES casino_loyalty_programs(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS casino_loyalty_status_images (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        casino_id INT NOT NULL,
+        status_id INT NOT NULL,
+        file_path VARCHAR(500) NOT NULL,
+        original_name VARCHAR(255) NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_loyalty_status_img_status (status_id),
+        KEY idx_loyalty_status_img_casino (casino_id),
+        CONSTRAINT casino_loyalty_status_img_casino_fk FOREIGN KEY (casino_id) REFERENCES casinos(id) ON DELETE CASCADE,
+        CONSTRAINT casino_loyalty_status_img_status_fk FOREIGN KEY (status_id) REFERENCES casino_loyalty_statuses(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
     // Drop removed columns from casino_promos if they exist (migration for existing DBs)
     for (const col of ['promo_kind', 'participation_button', 'notes']) {
       const [rows] = await connection.query<any[]>(

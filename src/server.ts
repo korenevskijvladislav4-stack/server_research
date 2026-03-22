@@ -27,6 +27,7 @@ import casinoPromoRoutes from './routes/casinoPromo.routes';
 import casinoProviderRoutes from './routes/casinoProvider.routes';
 import chatRoutes from './routes/chat.routes';
 import aiEmailProposalRoutes from './routes/aiEmailProposal.routes';
+import casinoLoyaltyRoutes from './routes/casinoLoyalty.routes';
 import { startEmailSyncScheduler } from './services/email-sync-scheduler.service';
 import { healthCheck } from './controllers/health.controller';
 import { asyncHandler } from './middleware/asyncHandler';
@@ -153,6 +154,7 @@ app.use(V1, casinoPromoRoutes);
 app.use(V1, casinoProviderRoutes);
 app.use(V1, chatRoutes);
 app.use(V1, aiEmailProposalRoutes);
+app.use(V1, casinoLoyaltyRoutes);
 
 app.get(`${V1}/health`, asyncHandler(healthCheck));
 

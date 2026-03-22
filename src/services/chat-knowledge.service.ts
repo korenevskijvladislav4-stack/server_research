@@ -20,6 +20,7 @@ export interface KnowledgeQuery {
 const VALID_ENTITIES = new Set([
   'casinos',
   'bonuses',
+  'loyalty_programs',
   'payments',
   'promos',
   'providers',
@@ -175,6 +176,54 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
           .join(' | ');
       }),
     );
+  }
+
+  if (need('loyalty_programs')) {
+    const where: { casino_id?: number; geo?: string } = {};
+    if (casinoId != null) where.casino_id = casinoId;
+    if (geo) where.geo = geo;
+    const programs = await prisma.casino_loyalty_programs.findMany({
+      where,
+      include: {
+        casinos: { select: { name: true } },
+        statuses: {
+          orderBy: [{ sort_order: 'asc' }, { id: 'asc' }],
+          include: {
+            _count: { select: { images: true } },
+          },
+        },
+      },
+      orderBy: [{ casino_id: 'asc' }, { geo: 'asc' }, { orientation: 'asc' }],
+      take: 200,
+    });
+
+    const lines: string[] = [];
+    for (const prog of programs) {
+      const casinoName = prog.casinos?.name ?? 'Казино без названия (id скрыт)';
+      const orient = prog.orientation === 'sport' ? 'спорт' : 'казино';
+      const cond = String(prog.conditions_md ?? '').trim();
+      const condShort = cond.length > 6000 ? `${cond.slice(0, 6000)}\n[... условия обрезаны ...]` : cond;
+
+      lines.push(
+        `${casinoName} | GEO: ${prog.geo} | направление: ${orient}`,
+        `Условия программы (markdown):\n${condShort || '—'}`,
+      );
+
+      for (const st of prog.statuses) {
+        const desc = String(st.description_md ?? '').trim();
+        const descShort = desc.length > 4000 ? `${desc.slice(0, 4000)}\n[... описание статуса обрезано ...]` : desc;
+        const imgN = st._count?.images ?? 0;
+        lines.push(
+          `  Статус «${st.name}» | прикреплено скринов: ${imgN}`,
+          `  Описание привилегий (markdown):\n  ${(descShort || '—').replace(/\n/g, '\n  ')}`,
+        );
+      }
+      lines.push('');
+    }
+
+    if (lines.length > 0) {
+      push(sections, 'Программы лояльности', lines, MAX_SECTION_CHARS);
+    }
   }
 
   if (need('payments')) {
