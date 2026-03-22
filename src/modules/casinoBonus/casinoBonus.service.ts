@@ -137,7 +137,12 @@ export const casinoBonusService = {
     });
   },
 
-  async create(casinoId: number, data: Record<string, unknown>, actorId: number | null) {
+  async create(
+    casinoId: number,
+    data: Record<string, unknown>,
+    actorId: number | null,
+    opts?: { createdFromEmail?: boolean },
+  ) {
     const bonus = await prisma.casino_bonuses.create({
       data: {
         casino_id: casinoId,
@@ -182,6 +187,7 @@ export const casinoBonusService = {
         valid_to: data.valid_to ? new Date(data.valid_to as string) : null,
         status: (data.status as any) ?? 'active',
         notes: data.notes != null ? String(data.notes) : null,
+        created_from_email: opts?.createdFromEmail === true,
         created_by: actorId,
         updated_by: actorId,
       },

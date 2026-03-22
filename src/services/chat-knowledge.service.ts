@@ -146,6 +146,10 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
             : '—';
         const promo = b.promo_code ?? '—';
         const notes = b.notes ? String(b.notes).slice(0, 160) : '';
+        const fromEmail =
+          (b as { created_from_email?: boolean }).created_from_email === true
+            ? 'источник: создано из письма (ИИ)'
+            : '';
 
         return [
           casinoName,
@@ -164,6 +168,7 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
           `промокод: ${promo}`,
           `период: ${period}`,
           `статус: ${b.status ?? '—'}`,
+          fromEmail,
           notes ? `заметки: ${notes}` : '',
         ]
           .filter(Boolean)
@@ -266,6 +271,8 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
         const wageringPrize = p.wagering_prize ?? '—';
         const periodType = (p as any).period_type ?? 'fixed';
         const hasJoinButton = Boolean((p as any).has_participation_button);
+        const fromEmail =
+          p.created_from_email === true ? 'источник: создано из письма (ИИ)' : '';
 
         return [
           casinoName,
@@ -280,6 +287,7 @@ export async function buildTargetedKnowledgeContext(query: KnowledgeQuery): Prom
           `минимальная ставка: ${minBet}`,
           `вейджер приза: ${wageringPrize}`,
           `статус: ${p.status ?? '—'}`,
+          fromEmail,
           mechanics ? `механика: ${mechanics}` : '',
         ]
           .filter(Boolean)

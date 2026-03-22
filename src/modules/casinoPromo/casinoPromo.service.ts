@@ -73,7 +73,12 @@ export const casinoPromoService = {
     });
   },
 
-  async create(casinoId: number, data: Record<string, unknown>, actorId: number | null) {
+  async create(
+    casinoId: number,
+    data: Record<string, unknown>,
+    actorId: number | null,
+    opts?: { createdFromEmail?: boolean },
+  ) {
     const promo = await prisma.casino_promos.create({
       data: {
         casino_id: casinoId,
@@ -94,6 +99,7 @@ export const casinoPromoService = {
         min_bet: data.min_bet != null ? String(data.min_bet) : null,
         wagering_prize: data.wagering_prize != null ? String(data.wagering_prize) : null,
         status: (data.status as any) ?? 'active',
+        created_from_email: opts?.createdFromEmail === true,
         created_by: actorId,
         updated_by: actorId,
       },

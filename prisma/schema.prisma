@@ -100,6 +100,8 @@ model casino_bonuses {
   valid_to                               DateTime?                      @db.Date
   status                                 casino_bonuses_status?         @default(active)
   notes                                  String?                        @db.Text
+  /// Создано из входящего письма (утверждение ИИ-предложения)
+  created_from_email                     Boolean                        @default(false)
   created_at                             DateTime?                      @default(now()) @db.Timestamp(0)
   updated_at                             DateTime?                      @default(now()) @db.Timestamp(0)
   created_by                             Int?
@@ -277,6 +279,8 @@ model casino_promos {
   min_bet                               String?                      @db.VarChar(100)
   wagering_prize                        String?                      @db.VarChar(100)
   status                                casino_promos_status?        @default(active)
+  /// Создано из входящего письма (утверждение ИИ-предложения)
+  created_from_email                    Boolean                      @default(false)
   created_at                            DateTime?                    @default(now()) @db.Timestamp(0)
   updated_at                            DateTime?                    @default(now()) @db.Timestamp(0)
   created_by                            Int?

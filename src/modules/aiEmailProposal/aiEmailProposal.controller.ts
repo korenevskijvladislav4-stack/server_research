@@ -4,9 +4,28 @@ import { AppError } from '../../errors/AppError';
 import { aiEmailProposalService } from '../../services/email-ai-proposal.service';
 
 export async function listProposals(req: AuthRequest, res: Response): Promise<void> {
-  const viewed = String(req.query.viewed) === '1';
+  const viewedRaw = req.query.viewed;
+  const viewedParam = Array.isArray(viewedRaw) ? viewedRaw[0] : viewedRaw;
+  /** null — без фильтра по просмотру (вкладка «Все») */
+  const viewedFilter: boolean | null =
+    viewedParam === 'all' || viewedParam === '*'
+      ? null
+      : String(viewedParam) === '1'
+        ? true
+        : false;
   const type = req.query.type as 'bonus' | 'promo' | undefined;
-  const rows = await aiEmailProposalService.list(viewed, type);
+  const geo = typeof req.query.geo === 'string' ? req.query.geo : undefined;
+  const casinoRaw = req.query.casino_id;
+  const casinoNum =
+    casinoRaw != null && casinoRaw !== ''
+      ? Number(Array.isArray(casinoRaw) ? casinoRaw[0] : casinoRaw)
+      : NaN;
+  const casino_id = !Number.isNaN(casinoNum) && casinoNum > 0 ? casinoNum : undefined;
+
+  const rows = await aiEmailProposalService.list(viewedFilter, type, {
+    ...(geo?.trim() ? { geo: geo.trim() } : {}),
+    ...(casino_id != null ? { casino_id } : {}),
+  });
   res.json(rows);
 }
 

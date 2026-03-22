@@ -31,6 +31,21 @@ async function fetchEmailGeosByIds(emailIds: number[]): Promise<Map<number, stri
   return map;
 }
 
+/** ID писем, у которых GEO ящика (casino_accounts) совпадает с кодом. */
+async function findEmailIdsByMailboxGeo(geoUpper: string): Promise<number[]> {
+  const g = geoUpper.trim().toUpperCase().slice(0, 10);
+  if (!g) return [];
+  const rows = await prisma.$queryRaw<{ id: bigint | number }[]>(
+    Prisma.sql`
+      SELECT DISTINCT e.id
+      FROM emails e
+      INNER JOIN casino_accounts ca ON ca.email = e.to_email AND ca.casino_id = e.related_casino_id
+      WHERE ca.geo IS NOT NULL AND UPPER(TRIM(ca.geo)) = ${g}
+    `,
+  );
+  return rows.map((r) => Number(r.id));
+}
+
 function attachEmailGeo<T extends { email_id: number; emails: Record<string, unknown> | null }>(
   row: T,
   geoByEmail: Map<number, string | null>,
@@ -260,14 +275,37 @@ export async function tryCreateEmailAiProposal(
 }
 
 export const aiEmailProposalService = {
-  async list(viewed: boolean, proposalType?: 'bonus' | 'promo') {
-    const where: any = {
-      viewed_at: viewed ? { not: null } : null,
-    };
-    if (proposalType) where.proposal_type = proposalType;
+  async list(
+    /** true — только просмотренные, false — только непросмотренные, null — все */
+    viewed: boolean | null,
+    proposalType?: 'bonus' | 'promo',
+    opts?: { geo?: string; casino_id?: number },
+  ) {
+    const andParts: Prisma.ai_email_proposalsWhereInput[] = [];
+    if (viewed !== null) {
+      andParts.push({ viewed_at: viewed ? { not: null } : null });
+    }
+    if (proposalType) {
+      andParts.push({ proposal_type: proposalType });
+    }
+    if (opts?.casino_id != null && opts.casino_id > 0) {
+      const cid = opts.casino_id;
+      andParts.push({
+        OR: [{ suggested_casino_id: cid }, { emails: { related_casino_id: cid } }],
+      });
+    }
+    if (opts?.geo?.trim()) {
+      const g = opts.geo.trim().toUpperCase().slice(0, 10);
+      const emailIds = await findEmailIdsByMailboxGeo(g);
+      const geoOr: Prisma.ai_email_proposalsWhereInput[] = [{ suggested_geo: g }];
+      if (emailIds.length > 0) {
+        geoOr.push({ email_id: { in: emailIds } });
+      }
+      andParts.push({ OR: geoOr });
+    }
 
     const rows = await prisma.ai_email_proposals.findMany({
-      where,
+      where: { AND: andParts },
       orderBy: { created_at: 'desc' },
       take: 300,
       include: {
@@ -362,7 +400,7 @@ export const aiEmailProposalService = {
     const name = String(overrides.name ?? base.name ?? 'Бонус из письма').slice(0, 255);
     const body = { ...base, geo, name };
 
-    const bonus = await casinoBonusService.create(casinoId, body, userId);
+    const bonus = await casinoBonusService.create(casinoId, body, userId, { createdFromEmail: true });
 
     const rel = copyEmailScreenshotToSubdir(row.emails?.screenshot_url ?? null, id, 'bonuses');
     if (rel) {
@@ -405,7 +443,7 @@ export const aiEmailProposalService = {
     const name = String(overrides.name ?? base.name ?? 'Промо из письма').slice(0, 255);
     const body = { ...base, geo, name };
 
-    const promo = await casinoPromoService.create(casinoId, body, userId);
+    const promo = await casinoPromoService.create(casinoId, body, userId, { createdFromEmail: true });
 
     const rel = copyEmailScreenshotToSubdir(row.emails?.screenshot_url ?? null, id, 'promos');
     if (rel) {

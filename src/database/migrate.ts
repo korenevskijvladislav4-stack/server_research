@@ -545,6 +545,31 @@ const createTables = async () => {
       }
     }
 
+    const emailSourceCols = [
+      {
+        table: 'casino_bonuses',
+        name: 'created_from_email',
+        def: "TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Создано из письма (ИИ-предложение)'",
+      },
+      {
+        table: 'casino_promos',
+        name: 'created_from_email',
+        def: "TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Создано из письма (ИИ-предложение)'",
+      },
+    ];
+    for (const col of emailSourceCols) {
+      const [colRows] = await connection.query<any[]>(
+        `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+        [col.table, col.name],
+      );
+      const colExists = Array.isArray(colRows) && colRows[0]?.cnt > 0;
+      if (!colExists) {
+        await connection.query(`ALTER TABLE \`${col.table}\` ADD COLUMN \`${col.name}\` ${col.def}`);
+        console.log(`Added column ${col.table}.${col.name}`);
+      }
+    }
+
     // Casino payment methods per geo
     await connection.query(`
       CREATE TABLE IF NOT EXISTS casino_payments (
