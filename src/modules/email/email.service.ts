@@ -132,6 +132,70 @@ export const emailService = {
     return { data, date_from: from, date_to: to };
   },
 
+  /** Распределение писем по тематикам (topic_id) за период */
+  async getEmailTopicAnalytics(params: {
+    date_from?: string;
+    date_to?: string;
+    to_email?: string;
+    geo?: string;
+  }) {
+    const { date_from, date_to, to_email, geo } = params;
+
+    const now = new Date();
+    const defaultFrom = new Date(now);
+    defaultFrom.setDate(defaultFrom.getDate() - 29);
+
+    const from = date_from ?? defaultFrom.toISOString().slice(0, 10);
+    const to = date_to ?? now.toISOString().slice(0, 10);
+
+    let whereExtra = '';
+    let joinExtra = '';
+    const queryParams: unknown[] = [from, to];
+
+    if (to_email) {
+      whereExtra += ' AND e.to_email = ?';
+      queryParams.push(to_email);
+    }
+
+    if (geo) {
+      joinExtra =
+        ' LEFT JOIN casino_accounts ca ON ca.email = e.to_email AND ca.casino_id = e.related_casino_id';
+      whereExtra += ' AND ca.geo = ?';
+      queryParams.push(geo);
+    }
+
+    const rows = await prisma.$queryRawUnsafe<
+      { topic_id: number | null; topic_name: string; ai_target: string | null; cnt: number }[]
+    >(
+      `SELECT
+         e.topic_id,
+         COALESCE(MIN(et.name), 'Без тематики') AS topic_name,
+         MAX(et.ai_target) AS ai_target,
+         CAST(COUNT(*) AS UNSIGNED) AS cnt
+       FROM emails e
+       LEFT JOIN email_topics et ON et.id = e.topic_id
+       ${joinExtra}
+       WHERE e.date_received IS NOT NULL
+         AND DATE(e.date_received) >= ?
+         AND DATE(e.date_received) <= ?
+         ${whereExtra}
+       GROUP BY e.topic_id
+       ORDER BY cnt DESC`,
+      ...queryParams,
+    );
+
+    const data = rows.map((r) => ({
+      topic_id: r.topic_id,
+      topic_name: r.topic_name || 'Без тематики',
+      ai_target: r.ai_target,
+      cnt: Number(r.cnt),
+    }));
+
+    const total = data.reduce((s, r) => s + r.cnt, 0);
+
+    return { data, date_from: from, date_to: to, total };
+  },
+
   async getAllEmailsStandard(params: {
     limit: number;
     offset: number;

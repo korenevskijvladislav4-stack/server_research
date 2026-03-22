@@ -8,6 +8,7 @@ const router = Router();
 
 router.get('/', authenticate, asyncHandler(emailController.getAllEmails));
 router.get('/analytics', authenticate, asyncHandler(emailController.getEmailAnalytics));
+router.get('/analytics/topics', authenticate, asyncHandler(emailController.getEmailTopicAnalytics));
 router.get('/recipients', authenticate, asyncHandler(emailController.getEmailRecipients));
 router.get('/export', authenticate, asyncHandler(emailController.exportEmailsXlsx));
 router.get(

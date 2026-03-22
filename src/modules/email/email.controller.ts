@@ -124,6 +124,17 @@ export const getEmailAnalytics = async (req: Request, res: Response): Promise<vo
   res.json(result);
 };
 
+export const getEmailTopicAnalytics = async (req: Request, res: Response): Promise<void> => {
+  const { date_from, date_to, to_email, geo } = req.query;
+  const result = await emailService.getEmailTopicAnalytics({
+    date_from: date_from ? String(date_from) : undefined,
+    date_to: date_to ? String(date_to) : undefined,
+    to_email: to_email ? String(to_email) : undefined,
+    geo: geo ? String(geo) : undefined,
+  });
+  res.json(result);
+};
+
 export const getAllEmails = async (req: Request, res: Response): Promise<void> => {
   const {
     limit = 50,
