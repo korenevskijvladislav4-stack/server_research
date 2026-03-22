@@ -27,11 +27,35 @@ function multerFilesArray(
   return Object.values(files).flat();
 }
 
+function fmtBonusNumber(n: casino_bonuses['cashback_percent']): string {
+  if (n == null) return '';
+  const num = Number(n);
+  if (Number.isNaN(num)) return String(n);
+  return Number.isInteger(num) ? String(num) : String(parseFloat(num.toFixed(2)));
+}
+
+/** Как в таблицах UI: диапазон кешбека, иначе один процент, иначе bonus_value */
 function formatBonusValue(
-  b: Pick<casino_bonuses, 'bonus_kind' | 'cashback_percent' | 'bonus_value' | 'bonus_unit' | 'currency'>,
+  b: Pick<
+    casino_bonuses,
+    | 'bonus_kind'
+    | 'cashback_percent'
+    | 'cashback_percent_min'
+    | 'cashback_percent_max'
+    | 'bonus_value'
+    | 'bonus_unit'
+    | 'currency'
+  >,
 ): string {
-  if (b.bonus_kind === 'cashback' && b.cashback_percent != null) {
-    return `${b.cashback_percent}%`;
+  if (b.cashback_percent_min != null || b.cashback_percent_max != null) {
+    const from = b.cashback_percent_min != null ? fmtBonusNumber(b.cashback_percent_min) : null;
+    const to = b.cashback_percent_max != null ? fmtBonusNumber(b.cashback_percent_max) : null;
+    if (from != null && to != null) return `${from}–${to}%`;
+    if (from != null) return `${from}%`;
+    if (to != null) return `${to}%`;
+  }
+  if (b.cashback_percent != null) {
+    return `${fmtBonusNumber(b.cashback_percent)}%`;
   }
   const v = b.bonus_value;
   if (v == null) return '';
@@ -129,7 +153,7 @@ export async function exportBonusesXlsx(req: Request, res: Response): Promise<vo
     { header: 'Категория', key: 'bonus_category', width: 12 },
     { header: 'Вид бонуса', key: 'bonus_kind', width: 14 },
     { header: 'Тип бонуса', key: 'bonus_type', width: 14 },
-    { header: 'Значение бонуса', key: 'bonus_value_display', width: 18 },
+    { header: 'Значение бонуса', key: 'bonus_value_display', width: 22 },
     { header: 'Валюта', key: 'currency', width: 10 },
     { header: 'Мин. депозит', key: 'min_deposit', width: 14 },
     { header: 'Макс. бонус', key: 'max_bonus', width: 14 },
