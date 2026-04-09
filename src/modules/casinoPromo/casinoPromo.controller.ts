@@ -113,8 +113,9 @@ export async function exportPromosXlsx(req: Request, res: Response): Promise<voi
 
 export async function listCasinoPromos(req: Request, res: Response): Promise<void> {
   const casinoId = Number(req.params.casinoId);
-  const geo = req.query.geo as string | undefined;
-  const list = await casinoPromoService.listByCasino(casinoId, geo);
+  const geoRaw = req.query.geo;
+  const geos: string[] = (Array.isArray(geoRaw) ? geoRaw.map(String) : (geoRaw ? [String(geoRaw)] : [])).filter(Boolean);
+  const list = await casinoPromoService.listByCasino(casinoId, geos.length > 0 ? geos : undefined);
   res.json(list.map((p) => ({ ...p, casino_name: (p as any).casinos?.name ?? null, casinos: undefined })));
 }
 

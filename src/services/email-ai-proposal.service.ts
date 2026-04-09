@@ -279,7 +279,7 @@ export const aiEmailProposalService = {
     /** true — только просмотренные, false — только непросмотренные, null — все */
     viewed: boolean | null,
     proposalType?: 'bonus' | 'promo',
-    opts?: { geo?: string; casino_id?: number },
+    opts?: { geo?: string | string[]; casino_id?: number },
   ) {
     const andParts: Prisma.ai_email_proposalsWhereInput[] = [];
     if (viewed !== null) {
@@ -294,12 +294,17 @@ export const aiEmailProposalService = {
         OR: [{ suggested_casino_id: cid }, { emails: { related_casino_id: cid } }],
       });
     }
-    if (opts?.geo?.trim()) {
-      const g = opts.geo.trim().toUpperCase().slice(0, 10);
-      const emailIds = await findEmailIdsByMailboxGeo(g);
-      const geoOr: Prisma.ai_email_proposalsWhereInput[] = [{ suggested_geo: g }];
-      if (emailIds.length > 0) {
-        geoOr.push({ email_id: { in: emailIds } });
+    const geoArr = opts?.geo
+      ? (Array.isArray(opts.geo) ? opts.geo : [opts.geo]).map((g) => g.trim().toUpperCase().slice(0, 10)).filter(Boolean)
+      : [];
+    if (geoArr.length > 0) {
+      const emailIdSets = await Promise.all(geoArr.map((g) => findEmailIdsByMailboxGeo(g)));
+      const allEmailIds = [...new Set(emailIdSets.flat())];
+      const geoOr: Prisma.ai_email_proposalsWhereInput[] = [
+        { suggested_geo: geoArr.length === 1 ? geoArr[0] : { in: geoArr } },
+      ];
+      if (allEmailIds.length > 0) {
+        geoOr.push({ email_id: { in: allEmailIds } });
       }
       andParts.push({ OR: geoOr });
     }

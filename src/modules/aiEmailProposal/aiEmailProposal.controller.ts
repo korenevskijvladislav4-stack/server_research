@@ -14,7 +14,8 @@ export async function listProposals(req: AuthRequest, res: Response): Promise<vo
         ? true
         : false;
   const type = req.query.type as 'bonus' | 'promo' | undefined;
-  const geo = typeof req.query.geo === 'string' ? req.query.geo : undefined;
+  const geoRaw = req.query.geo;
+  const geos: string[] = (Array.isArray(geoRaw) ? geoRaw.map(String) : (geoRaw ? [String(geoRaw)] : [])).filter(Boolean);
   const casinoRaw = req.query.casino_id;
   const casinoNum =
     casinoRaw != null && casinoRaw !== ''
@@ -23,7 +24,7 @@ export async function listProposals(req: AuthRequest, res: Response): Promise<vo
   const casino_id = !Number.isNaN(casinoNum) && casinoNum > 0 ? casinoNum : undefined;
 
   const rows = await aiEmailProposalService.list(viewedFilter, type, {
-    ...(geo?.trim() ? { geo: geo.trim() } : {}),
+    ...(geos.length > 0 ? { geo: geos } : {}),
     ...(casino_id != null ? { casino_id } : {}),
   });
   res.json(rows);

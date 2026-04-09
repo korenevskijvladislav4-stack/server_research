@@ -177,8 +177,9 @@ export const getAllScreenshots = async (req: AuthRequest, res: Response): Promis
   const casinoIdNum =
     typeof casinoId === 'string' && casinoId ? parseInt(casinoId, 10) : undefined;
 
+  const geoArr = Array.isArray(geo) ? geo.map(String).filter(Boolean) : (geo ? [String(geo)] : []);
   const result = await slotScreenshotService.getAllScreenshots({
-    geo: geo ? String(geo) : undefined,
+    geo: geoArr.length > 0 ? geoArr : undefined,
     section: section ? String(section) : undefined,
     category: category ? String(category) : undefined,
     casinoId: casinoIdNum && !isNaN(casinoIdNum) ? casinoIdNum : undefined,

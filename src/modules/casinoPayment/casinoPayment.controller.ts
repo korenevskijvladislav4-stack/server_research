@@ -136,11 +136,12 @@ export async function exportPaymentsXlsx(req: Request, res: Response): Promise<v
 
 export async function listCasinoPayments(req: Request, res: Response): Promise<void> {
   const casinoId = Number(req.params.casinoId);
-  const geo = req.query.geo as string | undefined;
+  const geoRaw = req.query.geo;
+  const geos: string[] = (Array.isArray(geoRaw) ? geoRaw.map(String) : (geoRaw ? [String(geoRaw)] : [])).filter(Boolean);
   if (!casinoId) {
     throw new AppError(400, 'Некорректный ID казино');
   }
-  const list = await casinoPaymentService.listByCasino(casinoId, geo);
+  const list = await casinoPaymentService.listByCasino(casinoId, geos.length > 0 ? geos : undefined);
   res.json(list);
 }
 

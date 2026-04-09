@@ -43,17 +43,38 @@ export const casinoService = {
     const sortOrder = params.sortOrder === 'desc' ? 'desc' : 'asc';
 
     const where: Record<string, unknown> = {};
+    const andParts: Record<string, unknown>[] = [];
     const filters = params.filters ?? {};
     if (filters.status !== undefined && filters.status !== '') where.status = filters.status as casinos_status;
     if (filters.is_our !== undefined && filters.is_our !== '') where.is_our = filters.is_our === true || filters.is_our === 'true' || filters.is_our === 1;
     if (params.search && String(params.search).trim()) {
-      const q = `%${String(params.search).trim()}%`;
-      where.OR = [
-        { name: { contains: q } },
-        { website: { contains: q } },
-        { description: { contains: q } },
-      ];
+      const q = String(params.search).trim();
+      andParts.push({
+        OR: [
+          { name: { contains: q } },
+          { website: { contains: q } },
+          { description: { contains: q } },
+        ],
+      });
     }
+    const geoRaw = filters.geo;
+    const geos: string[] = (Array.isArray(geoRaw) ? geoRaw.map(String) : (geoRaw ? [String(geoRaw)] : [])).filter(Boolean);
+    if (geos.length > 0) {
+      const geoSet = new Set(geos.map((g) => g.toUpperCase()));
+      const matchingIds = (
+        await prisma.casinos.findMany({ select: { id: true, geo: true } })
+      )
+        .filter((c) => {
+          const parsed = geoFromDb(c.geo);
+          return parsed && parsed.some((g) => geoSet.has(g.toUpperCase()));
+        })
+        .map((c) => c.id);
+      if (matchingIds.length === 0) {
+        return { data: [], pagination: { page, pageSize, total: 0, totalPages: 0 } };
+      }
+      andParts.push({ id: { in: matchingIds } });
+    }
+    if (andParts.length > 0) where.AND = andParts;
 
     const [total, rows] = await Promise.all([
       prisma.casinos.count({ where }),

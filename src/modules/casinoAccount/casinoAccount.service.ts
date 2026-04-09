@@ -61,7 +61,9 @@ export const casinoAccountService = {
         : Number(filters.casino_id);
     }
     if (filters.geo !== undefined && filters.geo !== '') {
-      where.geo = String(filters.geo);
+      where.geo = Array.isArray(filters.geo)
+        ? { in: (filters.geo as string[]).filter(Boolean) }
+        : String(filters.geo);
     }
     if (filters.owner_id !== undefined && filters.owner_id !== '') {
       where.owner_id = Array.isArray(filters.owner_id)

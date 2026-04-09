@@ -128,9 +128,12 @@ export const casinoBonusService = {
     });
   },
 
-  async listByCasino(casinoId: number, geo?: string) {
+  async listByCasino(casinoId: number, geo?: string | string[]) {
     const where: Prisma.casino_bonusesWhereInput = { casino_id: casinoId };
-    if (geo) where.geo = geo;
+    if (geo) {
+      const geoArr = Array.isArray(geo) ? geo : [geo];
+      where.geo = geoArr.length === 1 ? geoArr[0] : { in: geoArr };
+    }
     return prisma.casino_bonuses.findMany({
       where,
       orderBy: [{ geo: 'asc' }, { name: 'asc' }],

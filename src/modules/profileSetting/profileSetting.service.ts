@@ -2,9 +2,12 @@ import prisma from '../../lib/prisma';
 import { Prisma } from '@prisma/client';
 
 export const profileSettingService = {
-  async getByCasino(casinoId: number, geo?: string) {
+  async getByCasino(casinoId: number, geo?: string | string[]) {
     const where: Prisma.profile_settingsWhereInput = { casino_id: casinoId };
-    if (geo) where.geo = geo;
+    if (geo) {
+      const geoArr = Array.isArray(geo) ? geo : [geo];
+      where.geo = geoArr.length === 1 ? geoArr[0] : { in: geoArr };
+    }
     return prisma.profile_settings.findMany({ where });
   },
 

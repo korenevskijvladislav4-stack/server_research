@@ -4,8 +4,9 @@ import { AppError } from '../../errors/AppError';
 
 export async function getCasinoProfileSettings(req: Request, res: Response): Promise<void> {
   const casinoId = Number(req.params.casinoId);
-  const geo = req.query.geo as string | undefined;
-  const rows = await profileSettingService.getByCasino(casinoId, geo);
+  const geoRaw = req.query.geo;
+  const geos: string[] = (Array.isArray(geoRaw) ? geoRaw.map(String) : (geoRaw ? [String(geoRaw)] : [])).filter(Boolean);
+  const rows = await profileSettingService.getByCasino(casinoId, geos.length > 0 ? geos : undefined);
   res.json(rows);
 }
 

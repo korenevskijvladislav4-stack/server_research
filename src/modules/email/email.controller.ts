@@ -11,6 +11,13 @@ import { AppError } from '../../errors/AppError';
 import { summarizeEmailsByIds, assignEmailTopicsByIds } from '../../services/ai-summary.service';
 import { screenshotEmailsByIds } from '../../services/email-screenshot.service';
 
+function normalizeGeoQuery(raw: unknown): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
+  const s = String(raw).trim();
+  return s ? [s] : [];
+}
+
 /**
  * После ручного синка: скриншоты → саммари → темы (и предложения ИИ по темам с ai_target).
  * Важно: шаги последовательны и с await — как в email-sync-scheduler; иначе параллельный OpenAI
@@ -114,11 +121,12 @@ export const getEmailRecipients = async (_req: Request, res: Response): Promise<
 
 export const getEmailAnalytics = async (req: Request, res: Response): Promise<void> => {
   const { date_from, date_to, to_email, geo, topic_id } = req.query;
+  const geos = normalizeGeoQuery(geo);
   const result = await emailService.getEmailAnalytics({
     date_from: date_from ? String(date_from) : undefined,
     date_to: date_to ? String(date_to) : undefined,
     to_email: to_email ? String(to_email) : undefined,
-    geo: geo ? String(geo) : undefined,
+    geo: geos.length > 0 ? geos : undefined,
     topic_id: topic_id ? Number(topic_id) : undefined,
   });
   res.json(result);
@@ -126,11 +134,12 @@ export const getEmailAnalytics = async (req: Request, res: Response): Promise<vo
 
 export const getEmailTopicAnalytics = async (req: Request, res: Response): Promise<void> => {
   const { date_from, date_to, to_email, geo } = req.query;
+  const geos = normalizeGeoQuery(geo);
   const result = await emailService.getEmailTopicAnalytics({
     date_from: date_from ? String(date_from) : undefined,
     date_to: date_to ? String(date_to) : undefined,
     to_email: to_email ? String(to_email) : undefined,
-    geo: geo ? String(geo) : undefined,
+    geo: geos.length > 0 ? geos : undefined,
   });
   res.json(result);
 };
@@ -151,6 +160,8 @@ export const getAllEmails = async (req: Request, res: Response): Promise<void> =
   const lim = parseInt(limit as string, 10);
   const off = parseInt(offset as string, 10);
 
+  const geos = normalizeGeoQuery(geo);
+
   if (related_casino_id) {
     const result = await emailService.getAllEmailsByCasinoNameMatch({
       casinoId: Number(related_casino_id),
@@ -160,7 +171,7 @@ export const getAllEmails = async (req: Request, res: Response): Promise<void> =
       to_email: to_email ? String(to_email) : undefined,
       date_from: date_from ? String(date_from) : undefined,
       date_to: date_to ? String(date_to) : undefined,
-      geo: geo ? String(geo) : undefined,
+      geo: geos.length > 0 ? geos : undefined,
     });
     if (result.notFound) {
       throw new AppError(404, 'Казино не найдено');
@@ -181,7 +192,7 @@ export const getAllEmails = async (req: Request, res: Response): Promise<void> =
     to_email: to_email ? String(to_email) : undefined,
     date_from: date_from ? String(date_from) : undefined,
     date_to: date_to ? String(date_to) : undefined,
-    geo: geo ? String(geo) : undefined,
+    geo: geos.length > 0 ? geos : undefined,
     topic_id: topic_id ? Number(topic_id) : undefined,
   });
 
@@ -395,10 +406,11 @@ export const exportEmailsXlsx = async (req: Request, res: Response): Promise<voi
   const host = req.get('host') || 'localhost:5000';
   const baseUrl = `${proto}://${host}`;
 
+  const geos = normalizeGeoQuery(geo);
   const emails = await emailService.exportEmails({
     related_casino_id: related_casino_id ? String(related_casino_id) : undefined,
     to_email: to_email ? String(to_email) : undefined,
-    geo: geo ? String(geo) : undefined,
+    geo: geos.length > 0 ? geos : undefined,
     date_from: date_from ? String(date_from) : undefined,
     date_to: date_to ? String(date_to) : undefined,
     is_read: is_read ? String(is_read) : undefined,

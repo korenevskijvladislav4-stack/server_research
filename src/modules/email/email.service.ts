@@ -69,7 +69,7 @@ export const emailService = {
     date_from?: string;
     date_to?: string;
     to_email?: string;
-    geo?: string;
+    geo?: string[];
     topic_id?: number;
   }) {
     const { date_from, date_to, to_email, geo, topic_id } = params;
@@ -90,11 +90,12 @@ export const emailService = {
       queryParams.push(to_email);
     }
 
-    if (geo) {
+    if (geo && geo.length > 0) {
       joinExtra =
         ' LEFT JOIN casino_accounts ca ON ca.email = e.to_email AND ca.casino_id = e.related_casino_id';
-      whereExtra += ' AND ca.geo = ?';
-      queryParams.push(geo);
+      const placeholders = geo.map(() => '?').join(',');
+      whereExtra += ` AND ca.geo IN (${placeholders})`;
+      queryParams.push(...geo);
     }
     if (topic_id) {
       whereExtra += ' AND e.topic_id = ?';
@@ -137,7 +138,7 @@ export const emailService = {
     date_from?: string;
     date_to?: string;
     to_email?: string;
-    geo?: string;
+    geo?: string[];
   }) {
     const { date_from, date_to, to_email, geo } = params;
 
@@ -157,11 +158,12 @@ export const emailService = {
       queryParams.push(to_email);
     }
 
-    if (geo) {
+    if (geo && geo.length > 0) {
       joinExtra =
         ' LEFT JOIN casino_accounts ca ON ca.email = e.to_email AND ca.casino_id = e.related_casino_id';
-      whereExtra += ' AND ca.geo = ?';
-      queryParams.push(geo);
+      const placeholders = geo.map(() => '?').join(',');
+      whereExtra += ` AND ca.geo IN (${placeholders})`;
+      queryParams.push(...geo);
     }
 
     const rows = await prisma.$queryRawUnsafe<
@@ -203,7 +205,7 @@ export const emailService = {
     to_email?: string;
     date_from?: string;
     date_to?: string;
-    geo?: string;
+    geo?: string[];
     topic_id?: number;
   }) {
     const { limit, offset, is_read, to_email, date_from, date_to, geo, topic_id } = params;
@@ -233,10 +235,11 @@ export const emailService = {
       queryParams.push(date_to);
       countParams.push(date_to);
     }
-    if (geo) {
-      whereClause += ' AND ca.geo = ?';
-      queryParams.push(geo);
-      countParams.push(geo);
+    if (geo && geo.length > 0) {
+      const placeholders = geo.map(() => '?').join(',');
+      whereClause += ` AND ca.geo IN (${placeholders})`;
+      queryParams.push(...geo);
+      countParams.push(...geo);
     }
     if (topic_id) {
       whereClause += ' AND e.topic_id = ?';
@@ -268,7 +271,7 @@ export const emailService = {
     to_email?: string;
     date_from?: string;
     date_to?: string;
-    geo?: string;
+    geo?: string[];
   }) {
     const { casinoId, limit, offset, is_read, to_email, date_from, date_to, geo } = params;
 
@@ -301,8 +304,8 @@ export const emailService = {
     if (to_email) {
       matched = matched.filter((e) => e.to_email === to_email);
     }
-    if (geo) {
-      matched = matched.filter((e) => e.geo === geo);
+    if (geo && geo.length > 0) {
+      matched = matched.filter((e) => e.geo != null && geo.includes(e.geo));
     }
     if (date_from) {
       matched = matched.filter((e) => {
@@ -409,7 +412,7 @@ export const emailService = {
   async exportEmails(params: {
     related_casino_id?: string;
     to_email?: string;
-    geo?: string;
+    geo?: string[];
     date_from?: string;
     date_to?: string;
     is_read?: string;
@@ -440,9 +443,10 @@ export const emailService = {
       whereClause += ' AND e.is_read = ?';
       queryParams.push(is_read === 'true');
     }
-    if (geo) {
-      whereClause += ' AND ca.geo = ?';
-      queryParams.push(geo);
+    if (geo && geo.length > 0) {
+      const placeholders = geo.map(() => '?').join(',');
+      whereClause += ` AND ca.geo IN (${placeholders})`;
+      queryParams.push(...geo);
     }
     if (topic_id) {
       whereClause += ' AND e.topic_id = ?';

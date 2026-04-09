@@ -73,7 +73,7 @@ export const slotScreenshotService = {
   },
 
   async getAllScreenshots(filters: {
-    geo?: string;
+    geo?: string | string[];
     section?: string;
     category?: string;
     casinoId?: number;
@@ -95,7 +95,8 @@ export const slotScreenshotService = {
     if (filters.geo || filters.section || filters.category || filters.casinoId) {
       where.selectors = where.selectors ?? {};
       if (filters.geo) {
-        where.selectors.geo = filters.geo;
+        const geoArr = Array.isArray(filters.geo) ? filters.geo : [filters.geo];
+        where.selectors.geo = geoArr.length === 1 ? geoArr[0] : { in: geoArr };
       }
       if (filters.section) {
         where.selectors.section = filters.section;

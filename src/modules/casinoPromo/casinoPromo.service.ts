@@ -63,9 +63,12 @@ export const casinoPromoService = {
     });
   },
 
-  async listByCasino(casinoId: number, geo?: string) {
+  async listByCasino(casinoId: number, geo?: string | string[]) {
     const where: Prisma.casino_promosWhereInput = { casino_id: casinoId };
-    if (geo) where.geo = geo;
+    if (geo) {
+      const geoArr = Array.isArray(geo) ? geo : [geo];
+      where.geo = geoArr.length === 1 ? geoArr[0] : { in: geoArr };
+    }
     return prisma.casino_promos.findMany({
       where,
       include: { casinos: { select: { name: true } } },
