@@ -1,0 +1,68 @@
+# Nginx конфигурация для ResearchCRM
+# Разместите этот файл в /etc/nginx/sites-available/research-crm
+# Создайте симлинк: sudo ln -s /etc/nginx/sites-available/research-crm /etc/nginx/sites-enabled/
+# Проверьте конфигурацию: sudo nginx -t
+# Перезапустите Nginx: sudo systemctl restart nginx
+
+server {
+    listen 80;
+    server_name your-domain.com www.your-domain.com;  # ЗАМЕНИТЕ НА ВАШ ДОМЕН
+
+    # Логи
+    access_log /var/log/nginx/research-crm-access.log;
+    error_log /var/log/nginx/research-crm-error.log;
+
+    # Максимальный размер загружаемых файлов
+    client_max_body_size 50M;
+
+    # Проксирование API запросов на Node.js сервер
+    location /api {
+        proxy_pass http://localhost:5000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+        
+        # Таймауты для долгих запросов (например, скриншоты)
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+
+    # Статические файлы клиента (React build)
+    location / {
+        root /var/www/research-crm/client/dist;
+        try_files $uri $uri/ /index.html;
+        index index.html;
+        
+        # Кэширование статических ресурсов
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+    }
+
+    # Статические файлы загрузок (изображения, скриншоты)
+    location /api/uploads {
+        alias /var/www/research-crm/server/uploads;
+        expires 30d;
+        add_header Cache-Control "public";
+    }
+}
+
+# Для HTTPS (после настройки SSL сертификата)
+# server {
+#     listen 443 ssl http2;
+#     server_name your-domain.com www.your-domain.com;
+# 
+#     ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+#     ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+#     ssl_protocols TLSv1.2 TLSv1.3;
+#     ssl_ciphers HIGH:!aNULL:!MD5;
+# 
+#     # ... остальная конфигурация такая же ...
+# }
