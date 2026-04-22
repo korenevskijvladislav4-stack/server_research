@@ -858,6 +858,11 @@ enum casino_bonuses_bonus_type {
   cash
   freespin
   combo
+  freebet
+  wagering
+  insurance
+  accumulator
+  odds_boost
 }
 
 enum casinos_status {

@@ -411,7 +411,7 @@ const createTables = async () => {
         geo VARCHAR(10) NOT NULL,
         name VARCHAR(255) NOT NULL,
         bonus_kind ENUM('deposit','nodeposit','cashback','rakeback') NULL,
-        bonus_type ENUM('cash','freespin','combo') NULL,
+        bonus_type ENUM('cash','freespin','combo','freebet','wagering','insurance','accumulator','odds_boost') NULL,
         bonus_value DECIMAL(10,2) NULL,
         bonus_unit ENUM('percent','amount') DEFAULT 'amount',
         currency VARCHAR(10) NULL,
@@ -501,7 +501,7 @@ const createTables = async () => {
     // Update bonus_type column to new ENUM if needed
     try {
       await connection.query(`
-        ALTER TABLE casino_bonuses MODIFY COLUMN bonus_type ENUM('cash','freespin','combo') NULL
+        ALTER TABLE casino_bonuses MODIFY COLUMN bonus_type ENUM('cash','freespin','combo','freebet','wagering','insurance','accumulator','odds_boost') NULL
       `);
     } catch (e) {
       // Might fail if data exists with old values, that's ok
