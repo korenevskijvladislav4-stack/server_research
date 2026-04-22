@@ -6,6 +6,7 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { loadConfig, getConfig } from './config/env';
 import { errorHandler } from './middleware/errorHandler';
+import { requestAuditLogger } from './middleware/requestAudit.middleware';
 import { logger } from './utils/logger';
 import casinoRoutes from './routes/casino.routes';
 import emailRoutes from './routes/email.routes';
@@ -117,6 +118,7 @@ app.use(morgan('dev'));
 const jsonBodyLimit = process.env.JSON_BODY_LIMIT || '10mb';
 app.use(express.json({ limit: jsonBodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: jsonBodyLimit }));
+app.use(requestAuditLogger);
 
 // Static files for uploaded images
 // In development: __dirname = server/src, so ../uploads = server/uploads
