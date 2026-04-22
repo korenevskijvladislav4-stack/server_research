@@ -14,6 +14,7 @@ const SENSITIVE_KEYS = new Set([
   'accesstoken',
   'clientsecret',
 ]);
+const MAX_LOG_STRING_LENGTH = 2000;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -43,6 +44,24 @@ function sanitizeValue(value: unknown, depth = 0): unknown {
   return value;
 }
 
+function truncateString(value: string): string {
+  if (value.length <= MAX_LOG_STRING_LENGTH) return value;
+  return `${value.slice(0, MAX_LOG_STRING_LENGTH)}...[TRUNCATED_${value.length - MAX_LOG_STRING_LENGTH}_CHARS]`;
+}
+
+function sanitizeResponsePayload(value: unknown): unknown {
+  const sanitized = sanitizeValue(value);
+  if (typeof sanitized === 'string') return truncateString(sanitized);
+  try {
+    const asJson = JSON.stringify(sanitized);
+    if (!asJson) return sanitized;
+    if (asJson.length <= MAX_LOG_STRING_LENGTH) return sanitized;
+    return { preview: truncateString(asJson) };
+  } catch {
+    return '[UNSERIALIZABLE_RESPONSE]';
+  }
+}
+
 function createRequestId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -63,6 +82,18 @@ export function requestAuditLogger(req: Request, res: Response, next: NextFuncti
     query: sanitizeValue(req.query),
     body: sanitizeValue(req.body),
   };
+  let responseBody: unknown;
+
+  const originalJson = res.json.bind(res);
+  const originalSend = res.send.bind(res);
+  res.json = ((body: unknown) => {
+    responseBody = body;
+    return originalJson(body);
+  }) as Response['json'];
+  res.send = ((body?: unknown) => {
+    if (responseBody === undefined) responseBody = body;
+    return originalSend(body);
+  }) as Response['send'];
 
   logger.info(safeMeta, 'Request started');
 
@@ -75,6 +106,7 @@ export function requestAuditLogger(req: Request, res: Response, next: NextFuncti
       userId: userId ?? null,
       statusCode: res.statusCode,
       durationMs,
+      response: sanitizeResponsePayload(responseBody),
     };
 
     if (res.statusCode >= 500) {
